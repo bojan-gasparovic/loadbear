@@ -211,12 +211,26 @@ fn main() {
                         reader = TemperatureReader::open().ok();
                     }
 
+                    // A helper publishing a layout this build does not know
+                    // cannot have its record read at all, so ask the version
+                    // separately. It is the first field and has never moved.
+                    let layout_mismatch = reader
+                        .as_ref()
+                        .map(|r| r.published_version() != loadbear_sensors_windows::shared::LAYOUT_VERSION)
+                        .unwrap_or(false);
+
                     let published: Option<SharedTemperature> = reader
                         .as_ref()
                         .and_then(|r| r.read())
                         .filter(|s| s.is_fresh(now_ms()));
 
                     let (temp_available, temp_offerable, temp_reason) = match &published {
+                        _ if layout_mismatch => (
+                            false,
+                            true,
+                            "The background helper is out of date and needs updating."
+                                .to_string(),
+                        ),
                         // Readings are usable, but the helper predates this
                         // build, so a feature it does not know about would
                         // silently never appear.

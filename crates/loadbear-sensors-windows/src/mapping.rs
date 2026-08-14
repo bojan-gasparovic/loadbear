@@ -179,6 +179,19 @@ impl TemperatureReader {
         })
     }
 
+    /// Read only the layout version, which is safe across every layout.
+    ///
+    /// `version` is the first field and has never moved, so this stays readable
+    /// even when the rest of the record cannot be interpreted. Without it a
+    /// helper publishing an older layout is indistinguishable from no helper at
+    /// all, and the interface reports "unavailable" for something that is
+    /// running fine and merely needs updating.
+    pub fn published_version(&self) -> u32 {
+        // SAFETY: `self.view` is a valid mapped view, and `version` is the
+        // first field of every layout this has ever had.
+        unsafe { *(self.view as *const u32) }
+    }
+
     /// Read a settled record, retrying past any in-progress write.
     ///
     /// Gives up after a few attempts rather than spinning: a stuck writer must
