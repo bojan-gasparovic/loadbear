@@ -147,7 +147,11 @@ Known weak point: WebKitGTK is the Linux webview and is the least consistent of 
 | macOS | Mach host statistics, unprivileged | IOReport, unprivileged (approach proven by `macmon` and `macpow`) |
 | Windows | performance counters, unprivileged | **kernel driver, requires admin** |
 
-Temperature is the only privileged reading anywhere. LoadBear must therefore degrade to genuinely useful, not broken, when the driver is unavailable. This matters because the Windows driver path has a known history of antivirus false positives.
+Temperature is the only privileged reading anywhere. LoadBear must therefore degrade to genuinely useful, not broken, when the driver is unavailable.
+
+**Verified on Windows, 2026-08-14.** Seven performance counters were read from an unelevated shell, including `\Processor Information(_Total)\Processor Frequency` and `\% Processor Performance`. Multiplying those gives the real sustained all-core frequency, which means **the `BelowBaseClock` verdict, the strongest thing LoadBear says, needs no driver at all.** So do the stall signal, available memory, process attribution and Docker attribution. Only package temperature, package power and the throttle reason bits require the driver.
+
+**Elevation is an install-time cost, not a runtime one.** The driver is registered once as a service by the installer, and LoadBear then talks to the running device unprivileged. This was demonstrated during the LB-02 spike by reading eight per-core temperatures out of Core Temp's shared memory from an unelevated shell. A design requiring administrator rights on every run is rejected.
 
 Docker attribution uses the Docker socket API and is identical across all three platforms. One implementation, not three.
 
@@ -221,7 +225,6 @@ Same principle applies to any future aggregated comparison database: collect ear
 
 ## 16. Open decisions
 
-1. **Windows temperature path.** Whether to bundle a driver and drive its interface directly from Rust, or run a thin sidecar in another language and talk to it over IPC. To be settled by spike, not by argument. This is the first implementation task.
 1. **Data terms** for any future aggregated database, required before collection begins. Deferred until collection is actually built.
 
 ### Resolved
@@ -229,4 +232,6 @@ Same principle applies to any future aggregated comparison database: collect ear
 - **Implementation stack.** Rust core with a Tauri v2 shell. See section 8.
 - **Attribution depth.** Process and container, both in v1. See section 7.
 - **Actionable definition.** Widened from "can be closed" to "the user can do something about it", constrained by the remediation classes in section 7.
+- **Windows temperature path.** PawnIO, not WinRing0. WinRing0 is eliminated on evidence rather than preference: Microsoft Defender has classified it as `VulnerableDriver:WinNT/Winring0` since March 2025 with several catalogued variants, CVE-2020-14979 lets an unprivileged process read and write arbitrary memory which made it a Bring Your Own Vulnerable Driver target, and the Windows 11 22H2 blocklist blocks it outright. The only workaround is a registry change disabling that blocklist, and **LoadBear will never instruct a user to weaken a security control.** PawnIO is signed, HVCI-compatible, and runs sandboxed bytecode modules exposing narrow ioctls rather than raw ring-0 primitives. LibreHardwareMonitor migrated to it in 0.9.5, FanControl in v238, OpenRGB alongside. Modules exist for the targets that matter: `AMDFamily17.p` covers Zen family 17h including Renoir, `IntelMSR.p` covers Intel. See `docs/plans/2026-08-14-loadbear-windows-temperature.md`.
+- **LoadBear does not ship PawnIO.** Detect and prompt, never bundle. The driver is GPL-2.0 and the modules LGPL-2.1, and redistribution is the entire source of the resulting legal dependency. Since redistribution is optional, not bundling removes the GPL obligations, the need for bundling permission that PawnIO's public documentation does not grant, and any licence mixing in the tree. What remains is covered by an explicit exception in PawnIO's own licence for independent programs communicating solely over the device ioctl interface, which is the ordinary relationship any application has with a driver the user installed. The cost is a worse first run and it is accepted.
 - **Mascot artwork.** Crude placeholder silhouettes throughout v1, commissioned before public release. Three postures legible at 16 pixels as silhouette alone is a demanding brief, and it cannot be written honestly until the tier transitions have been watched firing on a real machine over a period of normal work.
