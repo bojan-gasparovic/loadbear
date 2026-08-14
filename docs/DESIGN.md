@@ -222,11 +222,11 @@ Same principle applies to any future aggregated comparison database: collect ear
 ## 16. Open decisions
 
 1. **Windows temperature path.** Whether to bundle a driver and drive its interface directly from Rust, or run a thin sidecar in another language and talk to it over IPC. To be settled by spike, not by argument. This is the first implementation task.
-2. **Mascot artwork.** Whether the bear is commissioned properly or a placeholder during the build.
-3. **Data terms** for any future aggregated database, required before collection begins. Deferred until collection is actually built.
+1. **Data terms** for any future aggregated database, required before collection begins. Deferred until collection is actually built.
 
 ### Resolved
 
 - **Implementation stack.** Rust core with a Tauri v2 shell. See section 8.
 - **Attribution depth.** Process and container, both in v1. See section 7.
 - **Actionable definition.** Widened from "can be closed" to "the user can do something about it", constrained by the remediation classes in section 7.
+- **Mascot artwork.** Crude placeholder silhouettes throughout v1, commissioned before public release. Three postures legible at 16 pixels as silhouette alone is a demanding brief, and it cannot be written honestly until the tier transitions have been watched firing on a real machine over a period of normal work.
