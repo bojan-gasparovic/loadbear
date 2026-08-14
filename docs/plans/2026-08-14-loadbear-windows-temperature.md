@@ -6,7 +6,7 @@
 
 **Architecture:** Temperature is the only privileged reading anywhere in LoadBear. It is reached through PawnIO, a signed kernel driver that executes sandboxed bytecode modules exposing narrow ioctls, rather than through a driver that hands userspace raw ring-0 access. The driver is registered once by the installer as a service. LoadBear itself runs unprivileged and talks to the already-running device, which is the same pattern that let an unelevated shell read Core Temp's data during the LB-02 spike.
 
-**Tech Stack:** Rust, `windows` crate for `CreateFile` and `DeviceIoControl`, PawnIO driver plus its `AMDFamily17` and `IntelMSR` modules.
+**Tech Stack:** Rust, `libloading` 0.9 to resolve `PawnIOLib.dll` at runtime, PawnIO driver plus its `AMDFamily17` and `IntelMSR` module blobs.
 
 **Spec:** `docs/DESIGN.md`
 **Prior plan:** `docs/plans/2026-08-14-loadbear-core.md`
@@ -41,9 +41,13 @@ The last point is decisive. Shipping a tool whose installation instructions incl
 - Installs headless from an installer, creating the `Root\PawnIO` device
 - Modules exist for the hardware LoadBear targets: `AMDFamily17.p` covers Zen family 17h, which includes the development machine's Renoir part, `IntelMSR.p` covers Intel, and `RyzenSMU.p` covers SMU access
 
-## LoadBear does not ship PawnIO
+## LoadBear does not ship the driver
 
-**Decided 2026-08-14.** LoadBear bundles no PawnIO code and no PawnIO binary. It detects the `Root\PawnIO` device at startup, and when the device is absent it reports temperature as unavailable and points the user at pawnio.eu.
+**Decided 2026-08-14.** LoadBear bundles no kernel driver and no `PawnIOLib.dll`. Both arrive with the user's own PawnIO installation. LoadBear detects the library at startup, and when it is absent reports temperature as unavailable and points the user at pawnio.eu.
+
+**It does ship the module blobs.** Amended 2026-08-14 after reading the upstream header: the compiled modules are a separate 63 KB download from the PawnIO.Modules releases, under LGPL-2.1. Requiring a second download would roughly double first-run friction for no licence benefit worth having, because LGPL redistribution is a NOTICE file and a source link rather than the GPL obligations that made bundling the driver unacceptable. `AMDFamily17` and `IntelMSR` ship with LoadBear; the driver and the library do not.
+
+**We also do not open the device ourselves.** PawnIO publishes a userspace library precisely so callers avoid issuing control codes directly, so there are no ioctl constants to transcribe and no chance of a wrong one corrupting kernel state. `PawnIOLib.dll` is LGPL-2.1 and is loaded dynamically at runtime, which is the arrangement LGPL exists to permit for a differently-licensed caller.
 
 This is a deliberate rejection of bundling, on the grounds that redistribution is the entire source of the legal dependency and redistribution is optional.
 
@@ -98,13 +102,28 @@ No `vendor/` directory. Nothing of PawnIO enters this tree.
 
 **Interfaces:**
 - Consumes: nothing from earlier tasks
-- Produces: `PawnIo`, `PawnIoError`, `PawnIo::open() -> Result<PawnIo, PawnIoError>`, `PawnIo::load_module(&self, bytes: &[u8]) -> Result<(), PawnIoError>`, `PawnIo::execute(&self, name: &str, input: &[u64]) -> Result<Vec<u64>, PawnIoError>`. Tasks 2 and 3 depend on these exact signatures.
+- Produces: `PawnIo`, `PawnIoError`, `PawnIo::open() -> Result<PawnIo, PawnIoError>`, `PawnIo::load_module(&self, blob: &[u8]) -> Result<(), PawnIoError>`, `PawnIo::execute(&self, name: &str, input: &[u64], out_capacity: usize) -> Result<Vec<u64>, PawnIoError>`. Tasks 2 and 3 depend on these exact signatures.
 
-- [ ] **Step 1: Read the PawnIO userspace interface before writing any of it**
+**Signature correction.** `execute` gained `out_capacity`, which the sketch above did not have. The upstream API requires the caller to size the output buffer and reports how many slots were written, so the parameter is not optional. This was found by reading the header rather than by a compile error, which is the point of Step 1.
 
-Do not invent ioctl codes. Read the actual interface from upstream: the public header or the reference userspace client in `github.com/namazso/PawnIO`, plus how LibreHardwareMonitor calls it in the `eb5e1a2` commit that swapped WinRing0 for PawnIO.
+- [x] **Step 1: Read the PawnIO userspace interface before writing any of it**
 
-Record in a comment at the top of `pawnio.rs`: the device path, each ioctl code, and the input and output buffer layouts, each with the upstream file and line they came from. An ioctl code with no cited source is a guess and will fail silently or corrupt state.
+**Done 2026-08-14, and it removed the hardest part of this task.** The interface is not a set of ioctls. PawnIO publishes a userspace library, `PawnIOLib.dll`, with a documented C API in `PawnIOLib/include/PawnIOLib.h`:
+
+```c
+PAWNIOAPI pawnio_version(PULONG version);
+PAWNIOAPI pawnio_open(PHANDLE handle);
+PAWNIOAPI pawnio_load(HANDLE handle, const UCHAR* blob, SIZE_T size);
+PAWNIOAPI pawnio_execute(HANDLE handle, PCSTR name,
+                         const ULONG64* in,  SIZE_T in_size,
+                         PULONG64      out, SIZE_T out_size,
+                         PSIZE_T return_size);
+PAWNIOAPI pawnio_close(HANDLE handle);
+```
+
+`PAWNIOAPI` expands to `EXTERN_C __declspec(dllimport) HRESULT STDAPICALLTYPE`, so every entry point returns an `HRESULT` where zero is success.
+
+So there are no ioctl codes to invent, no device path to hardcode, and no buffer layouts to reverse. The header block at the top of `pawnio.rs` records this provenance verbatim with the date it was read.
 
 - [ ] **Step 2: Write the failing test**
 
