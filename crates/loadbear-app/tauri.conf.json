@@ -11,10 +11,12 @@
       {
         "title": "LoadBear",
         "width": 460,
-        "height": 640,
-        "resizable": true,
+        "height": 720,
+        "resizable": false,
         "visible": true,
-        "decorations": true
+        "decorations": true,
+        "maximizable": false,
+        "fullscreen": false
       }
     ],
     "security": {

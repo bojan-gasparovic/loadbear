@@ -116,7 +116,7 @@ async fn enable_temperature() -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(|| match installer::install() {
         Ok(()) => {
             REPROBE.store(true, Ordering::Relaxed);
-            Ok("PawnIO installed. Reading temperature now.".to_string())
+            Ok("PawnIO installed. Restart Windows to finish enabling temperature.".to_string())
         }
         Err(e) => Err(e.to_string()),
     })

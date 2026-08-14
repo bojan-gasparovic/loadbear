@@ -1,42 +1,67 @@
 //! Fetches and runs the official PawnIO installer on the user's behalf.
 //!
-//! # Why download rather than bundle
+//! # The installer is bundled
 //!
-//! LoadBear redistributes nothing here, and that is deliberate. The PawnIO
-//! driver source is GPL-2.0 and `PawnIOLib.dll` is LGPL-2.1, both clear. But
-//! the signed installer is published from `namazso/PawnIO.Setup`, which
-//! declares no licence at all, so shipping that file would mean redistributing
-//! a binary on unstated terms.
+//! Bojan's call, 2026-08-14: the user should not have to install anything
+//! separately, and should not wait for a download either. `PawnIO_setup.exe`
+//! version 2.2.0 is embedded in the binary, written to a temporary path,
+//! signature-checked, and run silently.
 //!
-//! Downloading it at the user's request avoids that entirely. It also means
-//! they always get the current signed build rather than whatever version was
-//! pinned when LoadBear shipped, and the signature can be checked before
-//! anything is executed.
+//! Two things about that are worth recording rather than discovering later.
 //!
-//! The compiled PawnIO modules **are** shipped, in `modules/`. They are
-//! LGPL-2.1 with the licence text alongside, which is a well-understood
-//! obligation rather than an unknown one.
+//! **Licence.** The setup program is published from `namazso/PawnIO.Setup`,
+//! which declares no licence. The PawnIO driver source is GPL-2.0 and
+//! `PawnIOLib.dll` is LGPL-2.1, both clear, but the installer wrapper we ship
+//! carries no stated terms. This was raised and the decision was to bundle
+//! anyway.
+//!
+//! **The reboot.** Bundling does not avoid it. The setup program installs a
+//! root-enumerated PnP device via `newdev.dll` and
+//! `UpdateDriverForPlugAndPlayDevicesW`, which reports a reboot requirement.
+//! There are no `CreateService` or `StartService` calls anywhere in it, so it
+//! is not a dynamically loaded driver the way Core Temp's is. That difference
+//! is architectural and no packaging choice changes it.
+//!
+//! The compiled PawnIO modules are shipped alongside in `modules/`, LGPL-2.1
+//! with their licence text.
 
 use std::path::PathBuf;
 
-/// The official download, as linked from pawnio.eu.
+/// The bundled setup program, PawnIO 2.2.0.
 ///
-/// `/releases/latest/download/` always resolves to the newest release, so this
-/// URL does not go stale.
-pub const INSTALLER_URL: &str =
+/// SHA-256 `1f519a22e47187f70a1379a48ca604981c4fcf694f4e65b734aaa74a9fba3032`,
+/// obtained from the official release on 2026-08-14. Its signature is still
+/// verified at runtime rather than trusted on the basis of having shipped it,
+/// because a build machine is not a trustworthy place either.
+const SETUP_EXE: &[u8] = include_bytes!("../vendor/PawnIO_setup.exe");
+
+/// Where the bundled copy came from, for provenance rather than for fetching.
+pub const INSTALLER_SOURCE: &str =
     "https://github.com/namazso/PawnIO.Setup/releases/latest/download/PawnIO_setup.exe";
 
-/// Publisher expected on the installer's Authenticode signature.
+/// Arguments passed to the setup program.
 ///
-/// Checked as a substring of the signer's common name. A signature that is
-/// merely valid is not enough: anything with a trusted certificate would pass
-/// that. The publisher has to be the one we meant.
-pub const EXPECTED_PUBLISHER: &str = "namazso";
+/// Transcribed from the usage string embedded in the binary itself, read
+/// 2026-08-14:
+///
+/// ```text
+/// Usage: PawnIOSetup.exe [-install] [-uninstall] [-unrestricted] [-debuginfo] [-silent]
+///   -silent    Run in silent mode (no UI, even on error)
+/// ```
+///
+/// Launching it with no arguments shows its own interactive installer, which
+/// is exactly what LoadBear is meant to spare the user. `-silent` reduces the
+/// whole thing to the standard Windows consent prompt.
+///
+/// **`-unrestricted` is deliberately absent and must stay absent.** It selects
+/// the unsigned edition. LoadBear verifies the signature of what it downloads
+/// and would be undoing its own check by asking for an unsigned driver.
+const SETUP_ARGS: &str = "-install -silent";
 
 #[derive(Debug, thiserror::Error)]
 pub enum InstallError {
-    #[error("could not reach the PawnIO download")]
-    DownloadFailed,
+    #[error("the bundled installer could not be written to a temporary file")]
+    StagingFailed,
     #[error("the downloaded file does not look like an installer")]
     NotAnInstaller,
     #[error("the download is not signed by a trusted publisher, so it was not run")]
@@ -45,32 +70,22 @@ pub enum InstallError {
     LaunchFailed,
     #[error("installation was declined")]
     Declined,
+    #[error("PawnIO is already installed. Uninstall it first to reinstall.")]
+    AlreadyInstalled,
+    #[error("the installer ran but did not complete successfully")]
+    InstallerFailed,
 }
 
-/// Download the installer to a temporary path.
+/// Write the bundled setup program to a temporary path.
 ///
-/// Returns the path to the downloaded file. Nothing is executed here.
-pub fn download() -> Result<PathBuf, InstallError> {
-    let mut response = ureq::get(INSTALLER_URL)
-        .call()
-        .map_err(|_| InstallError::DownloadFailed)?;
-
-    let mut bytes = Vec::new();
-    std::io::copy(&mut response.body_mut().as_reader(), &mut bytes)
-        .map_err(|_| InstallError::DownloadFailed)?;
-
-    // A Windows executable starts with "MZ". Anything else means we were served
-    // an error page or a redirect body rather than the installer.
-    if bytes.len() < 2 || &bytes[..2] != b"MZ" {
-        return Err(InstallError::NotAnInstaller);
-    }
-    // The real installer is a few megabytes. A tiny "executable" is a red flag.
-    if bytes.len() < 500_000 {
+/// Nothing is executed here. No network is touched.
+pub fn stage() -> Result<PathBuf, InstallError> {
+    if SETUP_EXE.len() < 2 || &SETUP_EXE[..2] != b"MZ" {
         return Err(InstallError::NotAnInstaller);
     }
 
     let path = std::env::temp_dir().join("LoadBear-PawnIO_setup.exe");
-    std::fs::write(&path, &bytes).map_err(|_| InstallError::DownloadFailed)?;
+    std::fs::write(&path, SETUP_EXE).map_err(|_| InstallError::StagingFailed)?;
     Ok(path)
 }
 
@@ -143,7 +158,9 @@ use std::os::windows::ffi::OsStrExt;
 /// and the only one it needs.
 pub fn run_elevated(path: &std::path::Path) -> Result<(), InstallError> {
     use windows_sys::Win32::Foundation::CloseHandle;
-    use windows_sys::Win32::System::Threading::{WaitForSingleObject, INFINITE};
+    use windows_sys::Win32::System::Threading::{
+        GetExitCodeProcess, WaitForSingleObject, INFINITE,
+    };
     use windows_sys::Win32::UI::Shell::{
         ShellExecuteExW, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW,
     };
@@ -154,13 +171,18 @@ pub fn run_elevated(path: &std::path::Path) -> Result<(), InstallError> {
         .chain(std::iter::once(0))
         .collect();
     let verb: Vec<u16> = "runas".encode_utf16().chain(std::iter::once(0)).collect();
+    let args: Vec<u16> = SETUP_ARGS
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
 
     let mut info: SHELLEXECUTEINFOW = unsafe { std::mem::zeroed() };
     info.cbSize = std::mem::size_of::<SHELLEXECUTEINFOW>() as u32;
     info.fMask = SEE_MASK_NOCLOSEPROCESS;
     info.lpVerb = verb.as_ptr();
     info.lpFile = file.as_ptr();
-    info.nShow = 1; // SW_SHOWNORMAL
+    info.lpParameters = args.as_ptr();
+    info.nShow = 0; // SW_HIDE. Silent means silent.
 
     // SAFETY: `info` is zeroed, sized, and its pointers outlive the call.
     let ok = unsafe { ShellExecuteExW(&mut info) };
@@ -170,20 +192,31 @@ pub fn run_elevated(path: &std::path::Path) -> Result<(), InstallError> {
         return Err(InstallError::Declined);
     }
 
-    if !info.hProcess.is_null() {
-        // SAFETY: a valid process handle from ShellExecuteExW.
-        unsafe {
-            WaitForSingleObject(info.hProcess, INFINITE);
-            CloseHandle(info.hProcess);
-        }
+    if info.hProcess.is_null() {
+        return Err(InstallError::LaunchFailed);
     }
 
-    Ok(())
+    let mut code: u32 = 0;
+    // SAFETY: a valid process handle from ShellExecuteExW, waited on before
+    // its exit code is read and closed exactly once.
+    unsafe {
+        WaitForSingleObject(info.hProcess, INFINITE);
+        GetExitCodeProcess(info.hProcess, &mut code);
+        CloseHandle(info.hProcess);
+    }
+
+    // Silent mode suppresses the installer's own error reporting, so the exit
+    // code is the only signal there is. Ignoring it would let a failed install
+    // be reported to the user as a success.
+    match code {
+        0 => Ok(()),
+        _ => Err(InstallError::InstallerFailed),
+    }
 }
 
-/// Download, verify, and run, in that order.
+/// Stage, verify, and run, in that order.
 pub fn install() -> Result<(), InstallError> {
-    let path = download()?;
+    let path = stage()?;
     verify_signature(&path)?;
     run_elevated(&path)?;
     let _ = std::fs::remove_file(&path);
@@ -195,18 +228,47 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_installer_url_points_at_the_official_latest_release() {
-        assert!(INSTALLER_URL.starts_with("https://github.com/namazso/PawnIO.Setup/"));
+    fn the_setup_arguments_never_request_the_unsigned_edition() {
+        // -unrestricted installs the unsigned driver. Passing it would undo the
+        // signature check performed moments earlier.
         assert!(
-            INSTALLER_URL.contains("/releases/latest/download/"),
-            "the URL must track the latest release rather than pinning a stale build"
+            !SETUP_ARGS.contains("unrestricted"),
+            "LoadBear must never request the unsigned edition"
+        );
+        assert!(SETUP_ARGS.contains("-install"));
+        assert!(
+            SETUP_ARGS.contains("-silent"),
+            "without -silent the setup program shows its own installer UI"
+        );
+    }
+
+    #[test]
+    fn the_bundled_installer_is_a_real_executable_of_the_right_size() {
+        assert_eq!(&SETUP_EXE[..2], b"MZ", "the bundled file is not a PE image");
+        assert!(
+            SETUP_EXE.len() > 3_000_000,
+            "the bundled installer looks truncated at {} bytes",
+            SETUP_EXE.len()
+        );
+    }
+
+    #[test]
+    fn the_bundled_installer_still_passes_its_own_signature_check() {
+        // Shipping it is not a reason to trust it. This is the check that
+        // would catch a corrupted vendor file or a tampered build.
+        let p = stage().expect("staging the bundled installer must work");
+        let r = verify_signature(&p);
+        let _ = std::fs::remove_file(&p);
+        assert!(
+            r.is_ok(),
+            "the bundled installer failed signature verification"
         );
     }
 
     #[test]
     fn errors_are_displayable_without_leaking_raw_codes() {
         for e in [
-            InstallError::DownloadFailed,
+            InstallError::StagingFailed,
             InstallError::NotAnInstaller,
             InstallError::SignatureRejected,
             InstallError::LaunchFailed,
