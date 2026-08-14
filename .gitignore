@@ -33,3 +33,6 @@ desktop.ini
 # Local scratch
 .temp/
 scratch/
+
+# Tauri regenerates these on every build
+crates/loadbear-app/gen/
