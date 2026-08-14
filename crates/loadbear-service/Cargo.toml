@@ -1,0 +1,17 @@
+[package]
+name = "loadbear-service"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "LoadBear helper service. Reads hardware as Local System and publishes to shared memory."
+
+[[bin]]
+name = "loadbear-service"
+path = "src/main.rs"
+
+[dependencies]
+loadbear-core = { path = "../loadbear-core" }
+loadbear-sensors-windows = { path = "../loadbear-sensors-windows" }
+windows-service = "0.8.1"

@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "note": "Limits and vendor guarantees only. Never expected or normal temperatures, which are not published by any vendor and are not chassis-independent. Chassis and airflow account for roughly 8 to 10 degrees C of variance on identical silicon and ambient for a further 5 to 10, so any per-CPU normal range narrower than about 20 degrees is fabricated.",
+  "entries": [
+    {
+      "vendor": "Amd",
+      "family": 23,
+      "model": 96,
+      "stepping": 1,
+      "name": "AMD Ryzen 7 4980U",
+      "base_mhz": 2000,
+      "boost_mhz": 4400,
+      "tdp_watts": 15,
+      "ctdp_min_watts": 10,
+      "ctdp_max_watts": 25,
+      "tjmax_c": 105.0,
+      "cores": 8,
+      "threads": 16
+    },
+    {
+      "vendor": "Intel",
+      "family": 6,
+      "model": 140,
+      "stepping": 1,
+      "name": "Intel Core i7-1185G7",
+      "base_mhz": 3000,
+      "boost_mhz": 4800,
+      "tdp_watts": 28,
+      "ctdp_min_watts": 12,
+      "ctdp_max_watts": 28,
+      "tjmax_c": 100.0,
+      "cores": 4,
+      "threads": 8
+    },
+    {
+      "vendor": "Amd",
+      "family": 25,
+      "model": 33,
+      "stepping": 2,
+      "name": "AMD Ryzen 7 5800X",
+      "base_mhz": 3800,
+      "boost_mhz": 4700,
+      "tdp_watts": 105,
+      "ctdp_min_watts": null,
+      "ctdp_max_watts": null,
+      "tjmax_c": 90.0,
+      "cores": 8,
+      "threads": 16
+    }
+  ]
+}
