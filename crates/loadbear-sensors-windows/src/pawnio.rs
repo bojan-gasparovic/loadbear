@@ -53,9 +53,27 @@ type PawnIoExecute = unsafe extern "system" fn(
 ) -> HResult;
 type PawnIoClose = unsafe extern "system" fn(Handle) -> HResult;
 
-/// The library name, resolved through the standard Windows search path so a
-/// normal PawnIO installation is found without LoadBear knowing where it went.
+/// The library file name.
 const LIB_NAME: &str = "PawnIOLib.dll";
+
+/// Where PawnIO actually installs the library.
+///
+/// Verified on 2026-08-14: the setup program puts `PawnIOLib.dll` in
+/// `%ProgramFiles%\PawnIO`, which is **not** on the default DLL search path.
+/// Loading by bare name therefore fails even while the driver service is
+/// running, which reads to a user as "temperature is broken" when nothing is.
+fn candidate_paths() -> Vec<std::path::PathBuf> {
+    let mut v = Vec::new();
+    for var in ["ProgramFiles", "ProgramFiles(x86)", "ProgramW6432"] {
+        if let Ok(dir) = std::env::var(var) {
+            v.push(std::path::Path::new(&dir).join("PawnIO").join(LIB_NAME));
+        }
+    }
+    // Last resort: let Windows search, in case a future installer puts it
+    // somewhere on the path after all.
+    v.push(std::path::PathBuf::from(LIB_NAME));
+    v
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum PawnIoError {
@@ -103,9 +121,12 @@ impl PawnIo {
     /// rather than a failure. LoadBear ships no driver, so this is where every
     /// user starts.
     pub fn open() -> Result<Self, PawnIoError> {
-        // SAFETY: loading a library by name is sound. The library may run
-        // initialisation code, which is inherent to dynamic loading.
-        let lib = unsafe { Library::new(LIB_NAME) }.map_err(|_| PawnIoError::NotInstalled)?;
+        // SAFETY: loading a library is sound. It may run initialisation code,
+        // which is inherent to dynamic loading.
+        let lib = candidate_paths()
+            .into_iter()
+            .find_map(|p| unsafe { Library::new(&p) }.ok())
+            .ok_or(PawnIoError::NotInstalled)?;
 
         let mut handle: Handle = 0;
         // SAFETY: the symbol signature is transcribed from the upstream header
@@ -210,14 +231,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn absent_driver_reports_not_installed_rather_than_a_raw_os_error() {
+    fn an_unusable_driver_maps_to_a_domain_error_rather_than_a_raw_os_error() {
+        // Three outcomes are all legitimate depending on the machine:
+        //
+        //   NotInstalled  PawnIO was never installed
+        //   AccessDenied  installed, but this process is not elevated. The
+        //                 device is secured to SYSTEM and Administrators only,
+        //                 which is why LoadBear needs the helper service
+        //   Ok            installed and this process may open it
+        //
+        // What must never happen is a raw OS error reaching a caller.
         match PawnIo::open() {
-            Err(PawnIoError::NotInstalled) => {}
-            Err(e) => panic!("expected NotInstalled, got {e:?}"),
-            Ok(_) => {
-                // PawnIO is installed on this machine, which is a valid state.
-                // The elevated verification task covers that branch.
-            }
+            Err(PawnIoError::NotInstalled) | Err(PawnIoError::AccessDenied) | Ok(_) => {}
+            Err(e) => panic!("unexpected failure mode: {e:?}"),
         }
     }
 
@@ -239,6 +265,24 @@ mod tests {
                 "user-facing text must not contain raw error codes: {msg}"
             );
         }
+    }
+
+    #[test]
+    fn the_install_directory_is_searched_not_just_the_dll_search_path() {
+        // The regression this guards: PawnIO installs to a directory Windows
+        // does not search, so loading by bare name alone reports the driver as
+        // absent while it is running.
+        let paths = candidate_paths();
+        assert!(
+            paths
+                .iter()
+                .any(|p| p.parent().is_some_and(|d| d.ends_with("PawnIO"))),
+            "the PawnIO install directory must be searched explicitly"
+        );
+        assert!(
+            paths.len() > 1,
+            "a bare-name fallback should remain alongside the explicit paths"
+        );
     }
 
     #[test]

@@ -18,7 +18,9 @@ use loadbear_core::{classify, evaluate, CpuReading, Reading, SpecDb, ThrottleSta
 use loadbear_sensors_windows::counters::{to_stall, Counters};
 use loadbear_sensors_windows::cpuid::{brand_string, current_cpu_key};
 use loadbear_sensors_windows::installer;
-use loadbear_sensors_windows::temperature::{Remedy, TemperatureStatus, WindowsTemperature};
+use loadbear_sensors_windows::mapping::TemperatureReader;
+use loadbear_sensors_windows::service_control;
+use loadbear_sensors_windows::shared::SharedTemperature;
 use serde::Serialize;
 use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem};
@@ -113,12 +115,19 @@ fn get_status(state: State<'_, Shared>) -> Status {
 /// it is executed.
 #[tauri::command]
 async fn enable_temperature() -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(|| match installer::install() {
-        Ok(()) => {
-            REPROBE.store(true, Ordering::Relaxed);
-            Ok("PawnIO installed. Restart Windows to finish enabling temperature.".to_string())
+    tauri::async_runtime::spawn_blocking(|| {
+        // The driver may already be installed from an earlier attempt, which is
+        // not a failure. Only a genuinely unusable outcome should stop us.
+        if let Err(e) = installer::install() {
+            match e {
+                installer::InstallError::AlreadyInstalled
+                | installer::InstallError::InstallerFailed => {}
+                other => return Err(other.to_string()),
+            }
         }
-        Err(e) => Err(e.to_string()),
+        service_control::install_and_start().map_err(|e| e.to_string())?;
+        REPROBE.store(true, Ordering::Relaxed);
+        Ok("Temperature enabled.".to_string())
     })
     .await
     .map_err(|_| "the installer could not be started".to_string())?
@@ -177,9 +186,12 @@ fn main() {
                     .map(|n| n.get() as u32)
                     .unwrap_or(1);
 
-                // Re-created whenever an install completes, so the status is
-                // read fresh inside the loop rather than captured once here.
-                let mut temp = WindowsTemperature::new(key.as_ref());
+                // Temperature comes from the helper service through shared
+                // memory, never from this process. PawnIO's device admits only
+                // SYSTEM and Administrators, so an unprivileged interface
+                // cannot read it directly and should not try.
+                let started = std::time::Instant::now();
+                let mut reader = TemperatureReader::open().ok();
 
                 let mut last_tier = Tier::Easy;
 
@@ -188,20 +200,31 @@ fn main() {
                         continue;
                     };
 
-                    if REPROBE.swap(false, Ordering::Relaxed) {
-                        temp = WindowsTemperature::new(key.as_ref());
+                    if REPROBE.swap(false, Ordering::Relaxed) || reader.is_none() {
+                        reader = TemperatureReader::open().ok();
                     }
 
-                    let (temp_available, temp_offerable, temp_reason) = match temp.status() {
-                        TemperatureStatus::Available => (true, false, String::new()),
-                        TemperatureStatus::Unavailable { reason, remedy } => (
+                    let now_ms = started.elapsed().as_millis() as u64;
+                    let published: Option<SharedTemperature> = reader
+                        .as_ref()
+                        .and_then(|r| r.read())
+                        .filter(|s| s.is_fresh(now_ms.max(s.timestamp_ms)));
+
+                    let (temp_available, temp_offerable, temp_reason) = match &published {
+                        Some(_) => (true, false, String::new()),
+                        None if service_control::is_running() => (
                             false,
-                            matches!(remedy, Remedy::InstallDriver { .. }),
-                            reason.clone(),
+                            false,
+                            "The helper is running but has not published a reading yet."
+                                .to_string(),
+                        ),
+                        None => (
+                            false,
+                            true,
+                            "Temperature needs a small background helper, which runs with                              system access so LoadBear itself never has to."
+                                .to_string(),
                         ),
                     };
-
-                    let temps = temp.read();
 
                     let reading = Reading {
                         timestamp_ms: 0,
@@ -209,7 +232,7 @@ fn main() {
                         cpu: CpuReading {
                             all_core_mhz: sample.actual_mhz(),
                             package_watts: None,
-                            package_temp_c: temps.package_c,
+                            package_temp_c: published.as_ref().and_then(|s| s.package()),
                             tjmax_c: spec.as_ref().and_then(|s| s.tjmax_c),
                             throttle: ThrottleState {
                                 asserted: false,
@@ -260,12 +283,14 @@ fn main() {
                                 .collect(),
                             temp_available,
                             temp_offerable,
-                            temp_summary: match temps.package_c {
+                            temp_summary: match published.as_ref().and_then(|s| s.package()) {
                                 Some(c) => {
-                                    let zones: Vec<String> = temps
-                                        .zones
+                                    let zones: Vec<String> = published
+                                        .as_ref()
+                                        .map(|s| s.zone_list())
+                                        .unwrap_or_default()
                                         .iter()
-                                        .map(|z| format!("{} {:.1} C", z.label, z.celsius))
+                                        .map(|(l, v)| format!("{l} {v:.1} C"))
                                         .collect();
                                     if zones.is_empty() {
                                         format!("{c:.1} C package")

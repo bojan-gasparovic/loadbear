@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/loadbear-core", "crates/loadbear-sensors-windows", "crates/loadbear-app"]
+members = ["crates/loadbear-core", "crates/loadbear-sensors-windows", "crates/loadbear-service", "crates/loadbear-app"]
 resolver = "2"
 
 [workspace.package]
