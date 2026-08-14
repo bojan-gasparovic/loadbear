@@ -102,13 +102,21 @@ mod tests {
 
     #[test]
     fn stall_signal_reports_its_worst_resource() {
-        let stall = StallSignal { cpu: 0.10, memory: 0.72, io: 0.31 };
+        let stall = StallSignal {
+            cpu: 0.10,
+            memory: 0.72,
+            io: 0.31,
+        };
         assert_eq!(stall.worst(), (Resource::Memory, 0.72));
     }
 
     #[test]
     fn stall_signal_with_no_pressure_reports_cpu_at_zero() {
-        let stall = StallSignal { cpu: 0.0, memory: 0.0, io: 0.0 };
+        let stall = StallSignal {
+            cpu: 0.0,
+            memory: 0.0,
+            io: 0.0,
+        };
         assert_eq!(stall.worst(), (Resource::Cpu, 0.0));
     }
 }

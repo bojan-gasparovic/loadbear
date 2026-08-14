@@ -65,7 +65,11 @@ mod tests {
     use crate::verdict::{Severity, Verdict, VerdictKind};
 
     fn quiet() -> StallSignal {
-        StallSignal { cpu: 0.02, memory: 0.0, io: 0.01 }
+        StallSignal {
+            cpu: 0.02,
+            memory: 0.0,
+            io: 0.01,
+        }
     }
 
     fn verdict(kind: VerdictKind, severity: Severity) -> Verdict {
@@ -96,13 +100,21 @@ mod tests {
 
     #[test]
     fn heavy_stall_alone_is_braced_even_with_no_verdicts() {
-        let stall = StallSignal { cpu: 0.10, memory: 0.55, io: 0.20 };
+        let stall = StallSignal {
+            cpu: 0.10,
+            memory: 0.55,
+            io: 0.20,
+        };
         assert_eq!(classify(&[], &stall), Tier::Braced);
     }
 
     #[test]
     fn severe_stall_alone_is_strained_even_with_no_verdicts() {
-        let stall = StallSignal { cpu: 0.10, memory: 0.85, io: 0.20 };
+        let stall = StallSignal {
+            cpu: 0.10,
+            memory: 0.85,
+            io: 0.20,
+        };
         assert_eq!(
             classify(&[], &stall),
             Tier::Strained,
@@ -113,7 +125,11 @@ mod tests {
     #[test]
     fn the_worst_input_wins() {
         let v = [verdict(VerdictKind::ThermalHeadroomLow, Severity::Degraded)];
-        let stall = StallSignal { cpu: 0.10, memory: 0.85, io: 0.20 };
+        let stall = StallSignal {
+            cpu: 0.10,
+            memory: 0.85,
+            io: 0.20,
+        };
         assert_eq!(classify(&v, &stall), Tier::Strained);
     }
 }

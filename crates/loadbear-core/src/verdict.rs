@@ -145,7 +145,11 @@ mod tests {
     fn reading(cpu: CpuReading) -> Reading {
         Reading {
             timestamp_ms: 0,
-            stall: StallSignal { cpu: 0.0, memory: 0.0, io: 0.0 },
+            stall: StallSignal {
+                cpu: 0.0,
+                memory: 0.0,
+                io: 0.0,
+            },
             cpu,
             processes: vec![],
         }
@@ -157,7 +161,10 @@ mod tests {
             package_watts: Some(15.0),
             package_temp_c: Some(70.0),
             tjmax_c: Some(105.0),
-            throttle: ThrottleState { asserted: false, reason: None },
+            throttle: ThrottleState {
+                asserted: false,
+                reason: None,
+            },
         }
     }
 
@@ -184,7 +191,9 @@ mod tests {
         let mut cpu = healthy_cpu();
         cpu.all_core_mhz = Some(2000);
         let verdicts = evaluate(&reading(cpu), Some(&spec()));
-        assert!(!verdicts.iter().any(|v| v.kind == VerdictKind::BelowBaseClock));
+        assert!(!verdicts
+            .iter()
+            .any(|v| v.kind == VerdictKind::BelowBaseClock));
     }
 
     #[test]
@@ -203,7 +212,9 @@ mod tests {
         let mut cpu = healthy_cpu();
         cpu.package_watts = Some(31.0);
         let verdicts = evaluate(&reading(cpu), Some(&spec()));
-        assert!(verdicts.iter().any(|v| v.kind == VerdictKind::PowerOutsideBand));
+        assert!(verdicts
+            .iter()
+            .any(|v| v.kind == VerdictKind::PowerOutsideBand));
     }
 
     #[test]
@@ -226,11 +237,16 @@ mod tests {
     fn without_a_spec_only_chip_sourced_verdicts_are_produced() {
         let mut cpu = healthy_cpu();
         cpu.all_core_mhz = Some(800);
-        cpu.throttle = ThrottleState { asserted: true, reason: Some(ThrottleReason::Power) };
+        cpu.throttle = ThrottleState {
+            asserted: true,
+            reason: Some(ThrottleReason::Power),
+        };
         let verdicts = evaluate(&reading(cpu), None);
         assert!(verdicts.iter().any(|v| v.kind == VerdictKind::Throttling));
         assert!(
-            !verdicts.iter().any(|v| v.kind == VerdictKind::BelowBaseClock),
+            !verdicts
+                .iter()
+                .any(|v| v.kind == VerdictKind::BelowBaseClock),
             "base clock cannot be judged without a published guarantee"
         );
     }
@@ -242,7 +258,10 @@ mod tests {
             package_watts: None,
             package_temp_c: None,
             tjmax_c: None,
-            throttle: ThrottleState { asserted: false, reason: None },
+            throttle: ThrottleState {
+                asserted: false,
+                reason: None,
+            },
         };
         let verdicts = evaluate(&reading(cpu), Some(&spec()));
         assert!(verdicts.is_empty());
@@ -254,7 +273,10 @@ mod tests {
         cpu.all_core_mhz = Some(1600);
         cpu.package_watts = Some(31.0);
         cpu.package_temp_c = Some(103.0);
-        cpu.throttle = ThrottleState { asserted: true, reason: Some(ThrottleReason::Thermal) };
+        cpu.throttle = ThrottleState {
+            asserted: true,
+            reason: Some(ThrottleReason::Thermal),
+        };
         let verdicts = evaluate(&reading(cpu), Some(&spec()));
         assert_eq!(verdicts.len(), 4, "all four checks should fire");
         for v in &verdicts {

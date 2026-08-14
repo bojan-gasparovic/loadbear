@@ -84,7 +84,9 @@ impl SpecDb {
     /// LoadBear works offline. There is no runtime network dependency.
     pub fn embedded() -> Result<Self, SpecError> {
         let file: SpecFile = serde_json::from_str(EMBEDDED)?;
-        Ok(Self { entries: file.entries })
+        Ok(Self {
+            entries: file.entries,
+        })
     }
 
     /// Find the specification for a CPU.
@@ -117,7 +119,12 @@ mod tests {
     #[test]
     fn looks_up_a_known_cpu_by_cpuid_key() {
         let db = db();
-        let key = CpuKey { vendor: Vendor::Amd, family: 23, model: 96, stepping: 1 };
+        let key = CpuKey {
+            vendor: Vendor::Amd,
+            family: 23,
+            model: 96,
+            stepping: 1,
+        };
         let spec = db.lookup(&key).expect("4980U must be present");
         assert_eq!(spec.base_mhz, 2000);
         assert_eq!(spec.cores, 8);
@@ -127,14 +134,24 @@ mod tests {
     #[test]
     fn returns_none_for_an_unknown_cpu() {
         let db = db();
-        let key = CpuKey { vendor: Vendor::Other, family: 999, model: 999, stepping: 0 };
+        let key = CpuKey {
+            vendor: Vendor::Other,
+            family: 999,
+            model: 999,
+            stepping: 0,
+        };
         assert!(db.lookup(&key).is_none());
     }
 
     #[test]
     fn exposes_the_configurable_tdp_band_when_published() {
         let db = db();
-        let key = CpuKey { vendor: Vendor::Amd, family: 23, model: 96, stepping: 1 };
+        let key = CpuKey {
+            vendor: Vendor::Amd,
+            family: 23,
+            model: 96,
+            stepping: 1,
+        };
         let spec = db.lookup(&key).unwrap();
         assert_eq!(spec.ctdp_min_watts, Some(10));
         assert_eq!(spec.ctdp_max_watts, Some(25));

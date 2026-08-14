@@ -9,14 +9,16 @@
 //! guarantee, a hardware bit, or the machine's own history. Nothing here may
 //! invent a threshold.
 
+pub mod contract;
 pub mod spec;
 pub mod tier;
 pub mod types;
 pub mod verdict;
 
+pub use contract::{Cause, CauseKind, Finding, NotificationGate, Remediation};
 pub use spec::{CpuKey, CpuSpec, SpecDb, SpecError, Vendor};
 pub use tier::{classify, Tier};
-pub use verdict::{evaluate, Severity, Verdict, VerdictKind};
 pub use types::{
     CpuReading, ProcessReading, Reading, Resource, StallSignal, ThrottleReason, ThrottleState,
 };
+pub use verdict::{evaluate, Severity, Verdict, VerdictKind};
