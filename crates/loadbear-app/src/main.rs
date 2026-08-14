@@ -116,18 +116,22 @@ fn get_status(state: State<'_, Shared>) -> Status {
 #[tauri::command]
 async fn enable_temperature() -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(|| {
-        // The driver may already be installed from an earlier attempt, which is
-        // not a failure. Only a genuinely unusable outcome should stop us.
-        if let Err(e) = installer::install() {
-            match e {
-                installer::InstallError::AlreadyInstalled
-                | installer::InstallError::InstallerFailed => {}
-                other => return Err(other.to_string()),
+        // Everything privileged happens inside one elevated child, so the user
+        // sees a single consent prompt. Registering a service from this
+        // process would fail: the interface is deliberately unprivileged.
+        let helper = service_control::helper_path().map_err(|e| e.to_string())?;
+        let code = installer::run_elevated_with(&helper, "--setup").map_err(|e| e.to_string())?;
+
+        match code {
+            0 => {
+                REPROBE.store(true, Ordering::Relaxed);
+                Ok("Temperature enabled.".to_string())
             }
+            2 => Err("Setup was declined.".to_string()),
+            3 => Err("The hardware driver could not be installed.".to_string()),
+            4 => Err("The background helper could not be registered.".to_string()),
+            _ => Err("Setup did not complete.".to_string()),
         }
-        service_control::install_and_start().map_err(|e| e.to_string())?;
-        REPROBE.store(true, Ordering::Relaxed);
-        Ok("Temperature enabled.".to_string())
     })
     .await
     .map_err(|_| "the installer could not be started".to_string())?

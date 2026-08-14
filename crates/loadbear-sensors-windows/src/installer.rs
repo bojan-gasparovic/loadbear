@@ -214,6 +214,55 @@ pub fn run_elevated(path: &std::path::Path) -> Result<(), InstallError> {
     }
 }
 
+/// Run a program elevated and wait for it, returning its exit code.
+///
+/// Used to hand the whole privileged sequence to one child process, so the user
+/// sees a single consent prompt rather than one per privileged step.
+pub fn run_elevated_with(path: &std::path::Path, arguments: &str) -> Result<u32, InstallError> {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{
+        GetExitCodeProcess, WaitForSingleObject, INFINITE,
+    };
+    use windows_sys::Win32::UI::Shell::{
+        ShellExecuteExW, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW,
+    };
+
+    let file: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let verb: Vec<u16> = "runas".encode_utf16().chain(std::iter::once(0)).collect();
+    let args: Vec<u16> = arguments.encode_utf16().chain(std::iter::once(0)).collect();
+
+    let mut info: SHELLEXECUTEINFOW = unsafe { std::mem::zeroed() };
+    info.cbSize = std::mem::size_of::<SHELLEXECUTEINFOW>() as u32;
+    info.fMask = SEE_MASK_NOCLOSEPROCESS;
+    info.lpVerb = verb.as_ptr();
+    info.lpFile = file.as_ptr();
+    info.lpParameters = args.as_ptr();
+    info.nShow = 0;
+
+    // SAFETY: `info` is zeroed, sized, and its pointers outlive the call.
+    let ok = unsafe { ShellExecuteExW(&mut info) };
+    if ok == 0 {
+        return Err(InstallError::Declined);
+    }
+    if info.hProcess.is_null() {
+        return Err(InstallError::LaunchFailed);
+    }
+
+    let mut code: u32 = 0;
+    // SAFETY: a valid process handle, waited on before its code is read and
+    // closed exactly once.
+    unsafe {
+        WaitForSingleObject(info.hProcess, INFINITE);
+        GetExitCodeProcess(info.hProcess, &mut code);
+        CloseHandle(info.hProcess);
+    }
+    Ok(code)
+}
+
 /// Stage, verify, and run, in that order.
 pub fn install() -> Result<(), InstallError> {
     let path = stage()?;

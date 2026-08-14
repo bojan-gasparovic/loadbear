@@ -39,7 +39,40 @@ const SAMPLE_INTERVAL: Duration = Duration::from_millis(1500);
 define_windows_service!(ffi_service_main, service_main);
 
 fn main() -> Result<(), windows_service::Error> {
+    // Two modes. With `--setup` this is an ordinary elevated program that
+    // installs the driver and registers itself, then exits. With no arguments
+    // it is the service itself, started by the SCM.
+    //
+    // Doing setup here rather than in the interface is what keeps it to a
+    // single consent prompt: one elevated process does the driver and the
+    // service registration together.
+    if std::env::args().any(|a| a == "--setup") {
+        std::process::exit(setup());
+    }
     service_dispatcher::start(SERVICE_NAME, ffi_service_main)
+}
+
+/// Install the driver if needed, then register and start this service.
+///
+/// Returns a process exit code, because the caller can only see that.
+fn setup() -> i32 {
+    use loadbear_sensors_windows::installer::{self, InstallError};
+
+    // An existing PawnIO installation is not a failure. The setup program
+    // refuses to install over itself and that is the expected outcome on any
+    // second run.
+    if let Err(e) = installer::install() {
+        match e {
+            InstallError::AlreadyInstalled | InstallError::InstallerFailed => {}
+            InstallError::Declined => return 2,
+            _ => return 3,
+        }
+    }
+
+    match loadbear_sensors_windows::service_control::install_and_start() {
+        Ok(()) => 0,
+        Err(_) => 4,
+    }
 }
 
 fn service_main(_args: Vec<OsString>) {
