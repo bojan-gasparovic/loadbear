@@ -11,8 +11,10 @@
 
 pub mod spec;
 pub mod types;
+pub mod verdict;
 
 pub use spec::{CpuKey, CpuSpec, SpecDb, SpecError, Vendor};
+pub use verdict::{evaluate, Severity, Verdict, VerdictKind};
 pub use types::{
     CpuReading, ProcessReading, Reading, Resource, StallSignal, ThrottleReason, ThrottleState,
 };

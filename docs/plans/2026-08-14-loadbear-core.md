@@ -959,7 +959,7 @@ pub use verdict::{evaluate, Severity, Verdict, VerdictKind};
 
 Run: `cargo test -p loadbear-core`
 
-Expected: PASS, 13 tests.
+Expected: PASS, 14 tests. The plan originally said 13; a ninth verdict test was added to enforce the non-empty basis criterion, which had no test.
 
 - [ ] **Step 6: Commit**
 
@@ -1143,7 +1143,7 @@ pub use tier::{classify, Tier};
 
 Run: `cargo test -p loadbear-core`
 
-Expected: PASS, 19 tests.
+Expected: PASS, 20 tests.
 
 - [ ] **Step 6: Commit**
 
@@ -1432,7 +1432,7 @@ pub use contract::{Cause, CauseKind, Finding, NotificationGate, Remediation};
 
 Run: `cargo test -p loadbear-core`
 
-Expected: PASS, 26 tests.
+Expected: PASS, 27 tests.
 
 - [ ] **Step 6: Verify the whole crate is clean**
 
