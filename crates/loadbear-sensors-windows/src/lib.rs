@@ -12,6 +12,11 @@
 //! Windows, including the sustained all-core clock behind the `BelowBaseClock`
 //! verdict, reads from unprivileged performance counters.
 
+pub mod amd;
 pub mod pawnio;
 
+pub use amd::{
+    decode_ccd_temp, decode_die_temp, is_plausible_celsius, read_amd_temperature, PciGuard,
+    TemperatureReading, TemperatureZone,
+};
 pub use pawnio::{PawnIo, PawnIoError};
