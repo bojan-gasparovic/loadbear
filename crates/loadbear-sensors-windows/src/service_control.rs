@@ -78,22 +78,15 @@ pub fn install_and_start() -> Result<(), ServiceError> {
     let source = helper_path()?;
     let exe = installed_helper_path();
 
-    // Copy into the install location. A failure here when the target already
-    // exists and matches is not fatal: it usually means the service is running
-    // from it, which is the state we want anyway.
-    if source != exe {
-        if let Some(dir) = exe.parent() {
-            let _ = std::fs::create_dir_all(dir);
-        }
-        if std::fs::copy(&source, &exe).is_err() && !exe.exists() {
-            return Err(ServiceError::ExecutableMissing);
-        }
-    }
-
     let m = manager(ServiceManagerAccess::CONNECT | ServiceManagerAccess::CREATE_SERVICE)?;
 
-    // An existing registration may point somewhere stale, such as a previous
-    // build directory. Remove it rather than starting the wrong binary.
+    // Stop and deregister first, then copy.
+    //
+    // The order matters and getting it wrong is silent. Copying while the
+    // service is running fails, because Windows holds a running executable
+    // open, and an earlier version treated that failure as tolerable when the
+    // target already existed. The result was an upgrade that appeared to
+    // succeed while leaving the previous binary in place.
     if let Ok(old) = m.open_service(
         SERVICE_NAME,
         ServiceAccess::QUERY_STATUS | ServiceAccess::STOP | ServiceAccess::DELETE,
@@ -101,12 +94,29 @@ pub fn install_and_start() -> Result<(), ServiceError> {
         if let Ok(status) = old.query_status() {
             if status.current_state != ServiceState::Stopped {
                 let _ = old.stop();
-                std::thread::sleep(Duration::from_millis(800));
+                for _ in 0..20 {
+                    std::thread::sleep(Duration::from_millis(150));
+                    if old
+                        .query_status()
+                        .map(|s| s.current_state == ServiceState::Stopped)
+                        .unwrap_or(true)
+                    {
+                        break;
+                    }
+                }
             }
         }
         let _ = old.delete();
         drop(old);
-        std::thread::sleep(Duration::from_millis(300));
+        std::thread::sleep(Duration::from_millis(400));
+    }
+
+    if source != exe {
+        if let Some(dir) = exe.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        // Now fatal. Silently running a stale helper is worse than saying so.
+        std::fs::copy(&source, &exe).map_err(|_| ServiceError::ExecutableMissing)?;
     }
 
     let service = {
