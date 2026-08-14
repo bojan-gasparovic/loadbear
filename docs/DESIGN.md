@@ -79,13 +79,40 @@ Notification fatigue is the failure mode that kills tools in this category. A to
 
 1. **Sustained.** Spikes never notify. A build pegging every core for ninety seconds is a machine working correctly. Starting value: the condition must hold continuously for **5 minutes** before it can escalate to a notification. This number is a deliberate first guess to be tuned against real dogfooding, not a derived constant, and it should be configurable but not prominent.
 2. **Diagnosable.** The cause is identified, not merely the symptom.
-3. **Actionable.** There is something to close, kill, unplug or reconfigure.
+3. **Actionable.** There is something the user can do about it. Deliberately *not* "there is a process the user can end." Being unable to kill something is not the same as there being nothing to do, and the difference covers some of the highest-value findings LoadBear can make.
+
+### Remediation classes
+
+"Actionable" is only meaningful if it is testable. A finding qualifies when it maps to one of these, each of which carries a concrete action rather than an observation:
+
+| Class | Example |
+|---|---|
+| **Stop** | A process or container the user started and can end |
+| **Reconfigure a limit** | Docker Desktop memory allocation, WSL2 `.wslconfig` |
+| **Add an exclusion** | Antivirus scanning `node_modules` or a Rust `target/` directory during builds. Extremely common, rarely noticed, and often dramatic when fixed |
+| **Defer** | Search indexing or an OS update running during the workday |
+| **Change power state** | Running on battery at a reduced power limit, which accounts for a large share of "why is my build slow today" |
+| **Physical** | Baseline-driven, for example a rising idle temperature delta over months indicating dust or paste degradation |
+
+**Guard against drift.** Widening "actionable" raises fatigue risk, which makes the other two conditions load-bearing rather than incidental. Every class above names a specific action. "Something is using memory" is not a remediation class and must never become one. If a finding cannot be stated as a sentence ending in a thing the user does, it does not notify.
 
 "You are throttling" during a compile, with nothing to be done, is noise. "You have been below your guaranteed base clock for eleven minutes because Docker is holding 11 GB and you have started paging" is worth an interruption, because it ends in a decision.
 
 Strained without a notification is a legitimate and common state: the machine is genuinely struggling, but the cause is the build the user deliberately started. The tray reflects it. LoadBear does not tap anyone on the shoulder to report that compiling is slow.
 
 **Consequence:** attribution is a v1 requirement, not a later feature. The actionable condition cannot be evaluated without knowing the cause.
+
+### Attribution
+
+Two levels, both in v1.
+
+**Process level** comes from OS-native process enumeration and per-process counters.
+
+**Container level** requires a second data source, and this is not a refinement of process attribution. On Windows, Docker Desktop runs inside WSL2, so every container on the machine presents to Windows as a single `vmmem` process. Windows can report that Docker is holding 11 GB and can never report which container holds it. Resolving that means querying the Docker socket API directly and correlating.
+
+It is worth the extra source because Docker is the most common single cause of overload for this audience, which is exactly where process-only attribution is weakest. The Docker API is HTTP over a pipe or socket, is well documented, and is identical on all three platforms, so this is one implementation rather than three.
+
+**Correctness bar.** A confident wrong attribution is worse than none. Where the evidence supports naming a cause, name it. Where it does not, LoadBear reports the state and stays silent on the cause rather than guessing, and a finding with no attribution cannot satisfy the actionable condition and therefore cannot notify.
 
 ## 8. Architecture
 
@@ -97,6 +124,18 @@ Four layers. Only the first is platform-specific.
 4. **Presentation.** Tray posture, notification gate, window.
 
 This containment is the answer to the cost of cross-platform support. It triples layer one only. The layer holding all the product thinking never touches an OS API and is written once.
+
+### Stack
+
+**Rust core, Tauri v2 shell.**
+
+The work is not evenly distributed across platforms, so the choice came down to which platform's sensor problem should be the easy one. Rust makes Linux nearly free (`/proc`, `/sys`) and macOS close to solved, since `macmon` and `macpow` already demonstrate sudoless Apple Silicon metrics through IOReport. It concentrates the difficulty on Windows, which requires a kernel driver under any stack, so the hard part stays hard regardless.
+
+C# with Avalonia was the serious alternative, because LibreHardwareMonitorLib is .NET and is the strongest Windows sensor library available, making the first shipping platform the easy one. It was rejected because it front-loads convenience onto the platform Bojan can test and back-loads the two he cannot, and its footprint works against the constraint below.
+
+Tauri v2 provides a unified tray API across all three desktops with an Ayatana fallback on Linux, and uses roughly half the resident memory of an equivalent Electron build. That is not cosmetic here: **a monitoring tool that is itself a resource hog is self-refuting.** Electron was rejected on that basis alone.
+
+Known weak point: WebKitGTK is the Linux webview and is the least consistent of the three. Layer four is the only layer exposed to that.
 
 ## 9. Privilege model
 
@@ -149,7 +188,7 @@ Same principle applies to any future aggregated comparison database: collect ear
 - Windows sensor backend
 - Normalization layer
 - Diagnosis engine, including the four absolute verdicts
-- Attribution to process and container
+- Attribution to process, and to container via the Docker socket API
 - Tray with three postures
 - Notification gate implementing the interruption contract
 - Bundled CPU specification database
@@ -182,8 +221,12 @@ Same principle applies to any future aggregated comparison database: collect ear
 
 ## 16. Open decisions
 
-1. **Implementation stack.** Deliberately not decided. Established constraints: cross-platform, resident with low resident memory, capable of low-level sensor access and of loading or talking to a Windows kernel driver. Those constrain the choice without determining it. A monitoring tool that is itself a resource hog is self-refuting, which rules out the heaviest options.
-2. **Windows temperature path.** Whether to bundle a driver and drive its interface directly, or run a thin sidecar in another language. To be settled by spike, not by argument.
-3. **Mascot artwork.** Whether the bear is commissioned properly or a placeholder during the build.
-4. **Attribution depth.** Process level is required. Whether v1 also attributes to container, and how it handles the case where the cause is a system service rather than something the user can close.
-5. **Data terms** for any future aggregated database, required before collection begins.
+1. **Windows temperature path.** Whether to bundle a driver and drive its interface directly from Rust, or run a thin sidecar in another language and talk to it over IPC. To be settled by spike, not by argument. This is the first implementation task.
+2. **Mascot artwork.** Whether the bear is commissioned properly or a placeholder during the build.
+3. **Data terms** for any future aggregated database, required before collection begins. Deferred until collection is actually built.
+
+### Resolved
+
+- **Implementation stack.** Rust core with a Tauri v2 shell. See section 8.
+- **Attribution depth.** Process and container, both in v1. See section 7.
+- **Actionable definition.** Widened from "can be closed" to "the user can do something about it", constrained by the remediation classes in section 7.

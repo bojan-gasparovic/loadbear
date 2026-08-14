@@ -1,3 +1,18 @@
+# Rust
+target/
+**/*.rs.bk
+*.pdb
+
+# Tauri
+src-tauri/target/
+src-tauri/gen/
+
+# Frontend
+node_modules/
+dist/
+.vite/
+*.tsbuildinfo
+
 # Environment and secrets
 .env
 .env.*
@@ -18,6 +33,3 @@ desktop.ini
 # Local scratch
 .temp/
 scratch/
-
-# Build output and dependency directories are added once the
-# implementation stack is chosen. See docs/DESIGN.md section 16.
