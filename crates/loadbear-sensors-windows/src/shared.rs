@@ -51,6 +51,21 @@ pub const MAX_ZONES: usize = 16;
 /// three hours ago as though it were current.
 pub const STALE_AFTER_MS: u64 = 15_000;
 
+/// Milliseconds since the system booted.
+///
+/// Writer and reader are separate processes, so the timestamp on a reading is
+/// only meaningful if both sides read the same clock. Process uptime is not
+/// that clock: the first version compared the helper's uptime against the
+/// interface's, and every reading looked stale the moment the interface had
+/// been running longer than the helper.
+///
+/// `GetTickCount64` is system uptime, identical in every process on the
+/// machine, and needs no privileges.
+pub fn now_ms() -> u64 {
+    // SAFETY: no arguments, no failure mode, no allocation.
+    unsafe { windows_sys::Win32::System::SystemInformation::GetTickCount64() }
+}
+
 /// The published reading.
 ///
 /// `#[repr(C)]` because two independently compiled binaries agree on it only if
@@ -162,6 +177,17 @@ mod tests {
         SharedTemperature::set_label(&mut slot, "a-very-long-zone-name");
         assert_eq!(slot[7], 0, "the slot must stay NUL terminated");
         assert_eq!(&slot[..7], b"a-very-");
+    }
+
+    #[test]
+    fn the_shared_clock_advances_and_is_the_same_in_any_process() {
+        // Boot time rather than process time. If this ever became process
+        // uptime again, every reading would go stale as soon as the interface
+        // outlived the helper.
+        let a = now_ms();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        assert!(now_ms() > a);
+        assert!(a > 1_000, "system uptime should be well past a second");
     }
 
     #[test]

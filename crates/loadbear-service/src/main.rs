@@ -21,11 +21,11 @@
 use std::ffi::OsString;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use loadbear_sensors_windows::cpuid::current_cpu_key;
 use loadbear_sensors_windows::mapping::TemperaturePublisher;
-use loadbear_sensors_windows::shared::{SharedTemperature, MAX_ZONES};
+use loadbear_sensors_windows::shared::{now_ms, SharedTemperature, MAX_ZONES};
 use loadbear_sensors_windows::temperature::WindowsTemperature;
 use windows_service::service::{
     ServiceControl, ServiceControlAccept, ServiceExitCode, ServiceState, ServiceStatus, ServiceType,
@@ -123,13 +123,12 @@ fn sample_loop(stop: &AtomicBool) {
 
     let key = current_cpu_key();
     let mut temp = WindowsTemperature::new(key.as_ref());
-    let started = Instant::now();
 
     while !stop.load(Ordering::Relaxed) {
         let reading = temp.read();
 
         let mut out = SharedTemperature {
-            timestamp_ms: started.elapsed().as_millis() as u64,
+            timestamp_ms: now_ms(),
             package_c: reading.package_c.unwrap_or(f32::NAN),
             ..Default::default()
         };

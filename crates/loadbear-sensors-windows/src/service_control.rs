@@ -28,7 +28,17 @@ pub enum ServiceError {
     StartFailed,
 }
 
-/// Where the helper executable should be: alongside the running binary.
+/// Where the helper is installed to and registered from.
+///
+/// Deliberately not the build directory. Registering a service that points
+/// into `target/debug` means every rebuild fights a running service holding
+/// the file open, and a real installation would never do it either.
+pub fn installed_helper_path() -> PathBuf {
+    let base = std::env::var("ProgramFiles").unwrap_or_else(|_| r"C:\Program Files".to_string());
+    PathBuf::from(base).join("LoadBear").join(SERVICE_EXE)
+}
+
+/// Where the helper executable is found for installation: beside the caller.
 pub fn helper_path() -> Result<PathBuf, ServiceError> {
     let exe = std::env::current_exe().map_err(|_| ServiceError::ExecutableMissing)?;
     let dir = exe.parent().ok_or(ServiceError::ExecutableMissing)?;
@@ -65,17 +75,42 @@ pub fn is_running() -> bool {
 /// an error, because a half-finished previous attempt is a normal thing to
 /// recover from.
 pub fn install_and_start() -> Result<(), ServiceError> {
-    let exe = helper_path()?;
+    let source = helper_path()?;
+    let exe = installed_helper_path();
+
+    // Copy into the install location. A failure here when the target already
+    // exists and matches is not fatal: it usually means the service is running
+    // from it, which is the state we want anyway.
+    if source != exe {
+        if let Some(dir) = exe.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        if std::fs::copy(&source, &exe).is_err() && !exe.exists() {
+            return Err(ServiceError::ExecutableMissing);
+        }
+    }
+
     let m = manager(ServiceManagerAccess::CONNECT | ServiceManagerAccess::CREATE_SERVICE)?;
 
-    let existing = m.open_service(
+    // An existing registration may point somewhere stale, such as a previous
+    // build directory. Remove it rather than starting the wrong binary.
+    if let Ok(old) = m.open_service(
         SERVICE_NAME,
-        ServiceAccess::QUERY_STATUS | ServiceAccess::START,
-    );
+        ServiceAccess::QUERY_STATUS | ServiceAccess::STOP | ServiceAccess::DELETE,
+    ) {
+        if let Ok(status) = old.query_status() {
+            if status.current_state != ServiceState::Stopped {
+                let _ = old.stop();
+                std::thread::sleep(Duration::from_millis(800));
+            }
+        }
+        let _ = old.delete();
+        drop(old);
+        std::thread::sleep(Duration::from_millis(300));
+    }
 
-    let service = match existing {
-        Ok(s) => s,
-        Err(_) => {
+    let service = {
+        {
             let info = ServiceInfo {
                 name: OsString::from(SERVICE_NAME),
                 display_name: OsString::from(SERVICE_DISPLAY_NAME),
@@ -139,6 +174,17 @@ mod tests {
             assert!(!m.is_empty());
             assert!(!m.contains("0x"), "no raw codes in user-facing text: {m}");
         }
+    }
+
+    #[test]
+    fn the_service_is_registered_from_a_stable_location_not_the_build_directory() {
+        // Registering target/debug means every rebuild fights a running
+        // service holding the binary open. It cost a manual elevated stop
+        // once already.
+        let p = installed_helper_path();
+        let s = p.to_string_lossy().to_lowercase();
+        assert!(!s.contains("target"), "must not register a build path: {s}");
+        assert!(p.ends_with(SERVICE_EXE));
     }
 
     #[test]

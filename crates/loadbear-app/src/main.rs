@@ -20,7 +20,7 @@ use loadbear_sensors_windows::cpuid::{brand_string, current_cpu_key};
 use loadbear_sensors_windows::installer;
 use loadbear_sensors_windows::mapping::TemperatureReader;
 use loadbear_sensors_windows::service_control;
-use loadbear_sensors_windows::shared::SharedTemperature;
+use loadbear_sensors_windows::shared::{now_ms, SharedTemperature};
 use serde::Serialize;
 use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem};
@@ -194,7 +194,6 @@ fn main() {
                 // memory, never from this process. PawnIO's device admits only
                 // SYSTEM and Administrators, so an unprivileged interface
                 // cannot read it directly and should not try.
-                let started = std::time::Instant::now();
                 let mut reader = TemperatureReader::open().ok();
 
                 let mut last_tier = Tier::Easy;
@@ -208,11 +207,10 @@ fn main() {
                         reader = TemperatureReader::open().ok();
                     }
 
-                    let now_ms = started.elapsed().as_millis() as u64;
                     let published: Option<SharedTemperature> = reader
                         .as_ref()
                         .and_then(|r| r.read())
-                        .filter(|s| s.is_fresh(now_ms.max(s.timestamp_ms)));
+                        .filter(|s| s.is_fresh(now_ms()));
 
                     let (temp_available, temp_offerable, temp_reason) = match &published {
                         Some(_) => (true, false, String::new()),
