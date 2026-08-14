@@ -1,0 +1,18 @@
+[package]
+name = "loadbear-app"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "LoadBear desktop application. Tray, window, and the sampling loop."
+
+[build-dependencies]
+tauri-build = { version = "2.6.3", features = [] }
+
+[dependencies]
+loadbear-core = { path = "../loadbear-core" }
+loadbear-sensors-windows = { path = "../loadbear-sensors-windows" }
+tauri = { version = "2.11.5", features = ["tray-icon", "image-png"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
