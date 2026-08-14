@@ -217,6 +217,14 @@ fn main() {
                         .filter(|s| s.is_fresh(now_ms()));
 
                     let (temp_available, temp_offerable, temp_reason) = match &published {
+                        // Readings are usable, but the helper predates this
+                        // build, so a feature it does not know about would
+                        // silently never appear.
+                        Some(s) if !s.helper_is_current() => (
+                            true,
+                            true,
+                            "An update is available for the background helper.".to_string(),
+                        ),
                         Some(_) => (true, false, String::new()),
                         None if service_control::is_running() => (
                             false,

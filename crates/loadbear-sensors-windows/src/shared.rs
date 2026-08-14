@@ -38,7 +38,19 @@ pub const MAPPING_SDDL: &str = "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GR;;;BU)";
 ///
 /// The reader refuses a version it does not know rather than misinterpreting
 /// the bytes, which matters because the two processes are upgraded separately.
-pub const LAYOUT_VERSION: u32 = 1;
+pub const LAYOUT_VERSION: u32 = 2;
+
+/// Behaviour revision of the helper.
+///
+/// Bumped whenever the helper starts producing something the interface should
+/// notice, such as per-core zones appearing. The interface compares this
+/// against its own expectation and offers an update when they differ.
+///
+/// This exists because an installed helper is a separate binary with its own
+/// lifetime. Without it, a helper that predates a feature keeps running
+/// forever and the feature simply never appears, with nothing anywhere saying
+/// why. That happened once already.
+pub const HELPER_REVISION: u32 = 2;
 
 /// Maximum temperature zones carried. Renoir reports one die plus up to eight
 /// CCD slots, so sixteen is generous without being wasteful.
@@ -74,6 +86,8 @@ pub fn now_ms() -> u64 {
 #[derive(Debug, Clone, Copy)]
 pub struct SharedTemperature {
     pub version: u32,
+    /// Revision of the helper that published this. See [`HELPER_REVISION`].
+    pub helper_revision: u32,
     /// Seqlock. Odd while a write is in progress.
     pub sequence: u32,
     /// Milliseconds since the helper started, for staleness detection.
@@ -90,6 +104,7 @@ impl Default for SharedTemperature {
     fn default() -> Self {
         Self {
             version: LAYOUT_VERSION,
+            helper_revision: HELPER_REVISION,
             sequence: 0,
             timestamp_ms: 0,
             package_c: f32::NAN,
@@ -124,6 +139,15 @@ impl SharedTemperature {
                 )
             })
             .collect()
+    }
+
+    /// Whether the publishing helper is the revision this build expects.
+    ///
+    /// A stale helper still publishes usable readings, so this is not a
+    /// failure. It is the difference between a missing feature and a missing
+    /// feature nobody can explain.
+    pub fn helper_is_current(&self) -> bool {
+        self.helper_revision >= HELPER_REVISION
     }
 
     /// Whether this reading is recent enough to show.
@@ -201,6 +225,19 @@ mod tests {
             !s.is_fresh(1_000 + STALE_AFTER_MS + 1),
             "a dead helper leaves its last sample behind forever, so age must be checked"
         );
+    }
+
+    #[test]
+    fn a_helper_predating_this_build_is_detected_as_stale() {
+        // The failure this prevents: an installed helper that predates a
+        // feature keeps running, the feature never appears, and nothing
+        // anywhere says why.
+        let old = SharedTemperature {
+            helper_revision: HELPER_REVISION - 1,
+            ..Default::default()
+        };
+        assert!(!old.helper_is_current());
+        assert!(SharedTemperature::default().helper_is_current());
     }
 
     #[test]
