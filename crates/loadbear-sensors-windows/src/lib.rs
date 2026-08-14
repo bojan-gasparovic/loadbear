@@ -18,6 +18,7 @@ pub mod cpuid;
 pub mod installer;
 pub mod mapping;
 pub mod pawnio;
+pub mod pm_table;
 pub mod service_control;
 pub mod shared;
 pub mod temperature;
@@ -29,6 +30,7 @@ pub use amd::{
 pub use installer::{install, InstallError};
 pub use mapping::{MappingError, TemperaturePublisher, TemperatureReader};
 pub use pawnio::{PawnIo, PawnIoError};
+pub use pm_table::PerCoreTemperature;
 pub use service_control::{install_and_start, is_running, ServiceError};
 pub use shared::{SharedTemperature, MAPPING_NAME};
 pub use temperature::{Remedy, TemperatureStatus, WindowsTemperature, PAWNIO_URL};

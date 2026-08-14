@@ -61,6 +61,9 @@ struct Status {
     /// Whether the unavailable state is one the user can act on.
     temp_offerable: bool,
     temp_summary: String,
+    /// Labelled per-zone readings, so the interface can lay them out rather
+    /// than parse them back out of a sentence.
+    temp_zones: Vec<(String, f32)>,
     temp_reason: String,
 }
 
@@ -88,6 +91,7 @@ impl Default for Status {
             temp_available: false,
             temp_offerable: false,
             temp_summary: String::new(),
+            temp_zones: vec![],
             temp_reason: String::new(),
         }
     }
@@ -286,22 +290,13 @@ fn main() {
                             temp_available,
                             temp_offerable,
                             temp_summary: match published.as_ref().and_then(|s| s.package()) {
-                                Some(c) => {
-                                    let zones: Vec<String> = published
-                                        .as_ref()
-                                        .map(|s| s.zone_list())
-                                        .unwrap_or_default()
-                                        .iter()
-                                        .map(|(l, v)| format!("{l} {v:.1} C"))
-                                        .collect();
-                                    if zones.is_empty() {
-                                        format!("{c:.1} C package")
-                                    } else {
-                                        format!("{c:.1} C package, {}", zones.join(", "))
-                                    }
-                                }
+                                Some(c) => format!("{c:.1} C package"),
                                 None => "no reading".to_string(),
                             },
+                            temp_zones: published
+                                .as_ref()
+                                .map(|s| s.zone_list())
+                                .unwrap_or_default(),
                             temp_reason: temp_reason.clone(),
                         };
                     }

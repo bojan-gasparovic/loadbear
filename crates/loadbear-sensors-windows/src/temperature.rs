@@ -17,8 +17,9 @@
 
 use loadbear_core::{CpuKey, Vendor};
 
-use crate::amd::{read_amd_temperature, TemperatureReading};
+use crate::amd::{read_amd_temperature, TemperatureReading, TemperatureZone};
 use crate::pawnio::{PawnIo, PawnIoError};
+use crate::pm_table::PerCoreTemperature;
 
 /// AMD Zen family 17h and later. Gates on family 0x17 to 0x1A in its `main()`.
 const MODULE_AMD17: &[u8] = include_bytes!("../modules/AMDFamily17.bin");
@@ -56,6 +57,11 @@ impl TemperatureStatus {
 /// does not attempt a device open on every sampling tick.
 pub struct WindowsTemperature {
     device: Option<PawnIo>,
+    /// Second executor for the SMU table. A PawnIO executor holds one module,
+    /// and per-core temperature comes from a different module than the die
+    /// reading does.
+    per_core: Option<PerCoreTemperature>,
+    cores: usize,
     status: TemperatureStatus,
     vendor: Vendor,
 }
@@ -66,12 +72,17 @@ impl WindowsTemperature {
     /// Does the open and the module load once. Everything after this is a read.
     pub fn new(key: Option<&CpuKey>) -> Self {
         let vendor = key.map(|k| k.vendor).unwrap_or(Vendor::Other);
+        let cores = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(8);
 
         let device = match PawnIo::open() {
             Ok(d) => d,
             Err(PawnIoError::NotInstalled) => {
                 return Self {
                     device: None,
+                    per_core: None,
+                    cores,
                     status: TemperatureStatus::Unavailable {
                         reason: "LoadBear does not ship a kernel driver. Install PawnIO to \
                                  enable temperature monitoring."
@@ -84,6 +95,8 @@ impl WindowsTemperature {
             Err(e) => {
                 return Self {
                     device: None,
+                    per_core: None,
+                    cores,
                     status: TemperatureStatus::Unavailable {
                         reason: e.to_string(),
                         remedy: Remedy::None,
@@ -99,6 +112,8 @@ impl WindowsTemperature {
             Vendor::Other => {
                 return Self {
                     device: None,
+                    per_core: None,
+                    cores,
                     status: TemperatureStatus::Unavailable {
                         reason: "This processor vendor is not supported for temperature."
                             .to_string(),
@@ -115,6 +130,8 @@ impl WindowsTemperature {
             // than anything being broken.
             return Self {
                 device: None,
+                per_core: None,
+                cores,
                 status: TemperatureStatus::Unavailable {
                     reason: format!("No temperature module supports this processor. {e}"),
                     remedy: Remedy::None,
@@ -123,8 +140,18 @@ impl WindowsTemperature {
             };
         }
 
+        // Per-core is a bonus, not a requirement. A machine whose PM table
+        // layout is unverified still reports a die temperature.
+        let per_core = if vendor == Vendor::Amd {
+            PerCoreTemperature::new().ok().filter(|p| p.is_supported())
+        } else {
+            None
+        };
+
         Self {
             device: Some(device),
+            per_core,
+            cores,
             status: TemperatureStatus::Available,
             vendor,
         }
@@ -144,7 +171,18 @@ impl WindowsTemperature {
         };
 
         match self.vendor {
-            Vendor::Amd => read_amd_temperature(device).unwrap_or_default(),
+            Vendor::Amd => {
+                let mut r = read_amd_temperature(device).unwrap_or_default();
+                if let Some(pc) = &self.per_core {
+                    for (i, c) in pc.read(self.cores).into_iter().enumerate() {
+                        r.zones.push(TemperatureZone {
+                            label: format!("Core {i}"),
+                            celsius: c,
+                        });
+                    }
+                }
+                r
+            }
             // Intel reads land in LB-12. The module is loaded and the path is
             // reachable; it is simply not written yet, and saying so is better
             // than returning a number from nowhere.

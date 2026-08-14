@@ -18,6 +18,8 @@
 //! writes a struct. No diagnosis, no interface, no network. Everything that
 //! could be a bug in privileged code lives somewhere unprivileged instead.
 
+mod pmtable;
+
 use std::ffi::OsString;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -48,6 +50,11 @@ fn main() -> Result<(), windows_service::Error> {
     // service registration together.
     if std::env::args().any(|a| a == "--setup") {
         std::process::exit(setup());
+    }
+    // Diagnostic scaffolding, not product behaviour. Needs elevation, which is
+    // why it lives in the helper rather than the interface.
+    if std::env::args().any(|a| a == "--dump-pmtable") {
+        std::process::exit(pmtable::dump());
     }
     service_dispatcher::start(SERVICE_NAME, ffi_service_main)
 }
