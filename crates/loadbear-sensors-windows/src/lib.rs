@@ -13,6 +13,8 @@
 //! verdict, reads from unprivileged performance counters.
 
 pub mod amd;
+pub mod counters;
+pub mod cpuid;
 pub mod pawnio;
 
 pub use amd::{

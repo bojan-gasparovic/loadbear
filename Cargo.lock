@@ -46,6 +46,7 @@ version = "0.1.0"
 dependencies = [
  "libloading",
  "loadbear-core",
+ "raw-cpuid",
  "thiserror",
  "windows-sys",
 ]

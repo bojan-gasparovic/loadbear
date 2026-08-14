@@ -11,7 +11,13 @@ description = "Windows sensor backend for LoadBear. The only crate permitted to 
 loadbear-core = { path = "../loadbear-core" }
 libloading = "0.9.0"
 thiserror = { workspace = true }
+raw-cpuid = { workspace = true }
 
 [dependencies.windows-sys]
 version = "0.61.2"
-features = ["Win32_Foundation", "Win32_Security", "Win32_System_Threading"]
+features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_System_Performance",
+  "Win32_System_Threading",
+]
