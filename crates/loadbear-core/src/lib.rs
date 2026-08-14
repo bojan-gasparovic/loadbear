@@ -9,8 +9,10 @@
 //! guarantee, a hardware bit, or the machine's own history. Nothing here may
 //! invent a threshold.
 
+pub mod spec;
 pub mod types;
 
+pub use spec::{CpuKey, CpuSpec, SpecDb, SpecError, Vendor};
 pub use types::{
     CpuReading, ProcessReading, Reading, Resource, StallSignal, ThrottleReason, ThrottleState,
 };

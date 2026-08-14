@@ -397,10 +397,13 @@ mod tests {
         SpecDb::embedded().expect("embedded database must parse")
     }
 
+    // Bind the database to a local. `db().lookup(..)` borrows from a temporary
+    // that is dropped at the end of the statement, which does not compile.
     #[test]
     fn looks_up_a_known_cpu_by_cpuid_key() {
+        let db = db();
         let key = CpuKey { vendor: Vendor::Amd, family: 23, model: 96, stepping: 1 };
-        let spec = db().lookup(&key).expect("4980U must be present");
+        let spec = db.lookup(&key).expect("4980U must be present");
         assert_eq!(spec.base_mhz, 2000);
         assert_eq!(spec.cores, 8);
         assert_eq!(spec.threads, 16);
@@ -408,14 +411,16 @@ mod tests {
 
     #[test]
     fn returns_none_for_an_unknown_cpu() {
+        let db = db();
         let key = CpuKey { vendor: Vendor::Other, family: 999, model: 999, stepping: 0 };
-        assert!(db().lookup(&key).is_none());
+        assert!(db.lookup(&key).is_none());
     }
 
     #[test]
     fn exposes_the_configurable_tdp_band_when_published() {
+        let db = db();
         let key = CpuKey { vendor: Vendor::Amd, family: 23, model: 96, stepping: 1 };
-        let spec = db().lookup(&key).unwrap();
+        let spec = db.lookup(&key).unwrap();
         assert_eq!(spec.ctdp_min_watts, Some(10));
         assert_eq!(spec.ctdp_max_watts, Some(25));
     }
@@ -603,10 +608,13 @@ mod tests {
         SpecDb::embedded().expect("embedded database must parse")
     }
 
+    // Bind the database to a local. `db().lookup(..)` borrows from a temporary
+    // that is dropped at the end of the statement, which does not compile.
     #[test]
     fn looks_up_a_known_cpu_by_cpuid_key() {
+        let db = db();
         let key = CpuKey { vendor: Vendor::Amd, family: 23, model: 96, stepping: 1 };
-        let spec = db().lookup(&key).expect("4980U must be present");
+        let spec = db.lookup(&key).expect("4980U must be present");
         assert_eq!(spec.base_mhz, 2000);
         assert_eq!(spec.cores, 8);
         assert_eq!(spec.threads, 16);
@@ -614,14 +622,16 @@ mod tests {
 
     #[test]
     fn returns_none_for_an_unknown_cpu() {
+        let db = db();
         let key = CpuKey { vendor: Vendor::Other, family: 999, model: 999, stepping: 0 };
-        assert!(db().lookup(&key).is_none());
+        assert!(db.lookup(&key).is_none());
     }
 
     #[test]
     fn exposes_the_configurable_tdp_band_when_published() {
+        let db = db();
         let key = CpuKey { vendor: Vendor::Amd, family: 23, model: 96, stepping: 1 };
-        let spec = db().lookup(&key).unwrap();
+        let spec = db.lookup(&key).unwrap();
         assert_eq!(spec.ctdp_min_watts, Some(10));
         assert_eq!(spec.ctdp_max_watts, Some(25));
     }
