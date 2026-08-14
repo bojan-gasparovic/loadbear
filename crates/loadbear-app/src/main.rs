@@ -10,12 +10,14 @@
 //! transitions have been watched firing on a real machine over normal work,
 //! because that is the only way to write an honest brief for an illustrator.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use loadbear_core::{classify, evaluate, CpuReading, Reading, SpecDb, ThrottleState, Tier};
 use loadbear_sensors_windows::counters::{to_stall, Counters};
 use loadbear_sensors_windows::cpuid::{brand_string, current_cpu_key};
+use loadbear_sensors_windows::installer;
 use loadbear_sensors_windows::temperature::{Remedy, TemperatureStatus, WindowsTemperature};
 use serde::Serialize;
 use tauri::image::Image;
@@ -54,6 +56,8 @@ struct Status {
     stall_io: f32,
     verdicts: Vec<VerdictView>,
     temp_available: bool,
+    /// Whether the unavailable state is one the user can act on.
+    temp_offerable: bool,
     temp_summary: String,
     temp_reason: String,
 }
@@ -80,6 +84,7 @@ impl Default for Status {
             stall_io: 0.0,
             verdicts: vec![],
             temp_available: false,
+            temp_offerable: false,
             temp_summary: String::new(),
             temp_reason: String::new(),
         }
@@ -88,9 +93,35 @@ impl Default for Status {
 
 type Shared = Arc<Mutex<Status>>;
 
+/// Set when temperature needs re-probing, which is after an install.
+///
+/// The sampling thread owns the temperature source, so the command thread
+/// cannot replace it directly. It raises this instead and the loop picks it up
+/// on its next tick.
+static REPROBE: AtomicBool = AtomicBool::new(false);
+
 #[tauri::command]
 fn get_status(state: State<'_, Shared>) -> Status {
     state.lock().map(|s| s.clone()).unwrap_or_default()
+}
+
+/// Download, verify and run the official PawnIO installer.
+///
+/// Blocks until the installer exits, which is what lets the UI report a real
+/// outcome rather than an optimistic one. LoadBear redistributes nothing: the
+/// file comes from the official release URL and its signature is checked before
+/// it is executed.
+#[tauri::command]
+async fn enable_temperature() -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(|| match installer::install() {
+        Ok(()) => {
+            REPROBE.store(true, Ordering::Relaxed);
+            Ok("PawnIO installed. Reading temperature now.".to_string())
+        }
+        Err(e) => Err(e.to_string()),
+    })
+    .await
+    .map_err(|_| "the installer could not be started".to_string())?
 }
 
 fn tray_icon(tier: Tier) -> Option<Image<'static>> {
@@ -107,7 +138,7 @@ fn main() {
 
     tauri::Builder::default()
         .manage(shared.clone())
-        .invoke_handler(tauri::generate_handler![get_status])
+        .invoke_handler(tauri::generate_handler![get_status, enable_temperature])
         .setup(move |app| {
             let quit = MenuItem::with_id(app, "quit", "Quit LoadBear", true, None::<&str>)?;
             let show = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
@@ -146,17 +177,9 @@ fn main() {
                     .map(|n| n.get() as u32)
                     .unwrap_or(1);
 
+                // Re-created whenever an install completes, so the status is
+                // read fresh inside the loop rather than captured once here.
                 let mut temp = WindowsTemperature::new(key.as_ref());
-                let (temp_available, temp_reason) = match temp.status() {
-                    TemperatureStatus::Available => (true, String::new()),
-                    TemperatureStatus::Unavailable { reason, remedy } => {
-                        let suffix = match remedy {
-                            Remedy::InstallDriver { url } => format!(" {url}"),
-                            Remedy::None => String::new(),
-                        };
-                        (false, format!("{reason}{suffix}"))
-                    }
-                };
 
                 let mut last_tier = Tier::Easy;
 
@@ -164,6 +187,20 @@ fn main() {
                     let Ok(sample) = counters.sample(SAMPLE_INTERVAL) else {
                         continue;
                     };
+
+                    if REPROBE.swap(false, Ordering::Relaxed) {
+                        temp = WindowsTemperature::new(key.as_ref());
+                    }
+
+                    let (temp_available, temp_offerable, temp_reason) = match temp.status() {
+                        TemperatureStatus::Available => (true, false, String::new()),
+                        TemperatureStatus::Unavailable { reason, remedy } => (
+                            false,
+                            matches!(remedy, Remedy::InstallDriver { .. }),
+                            reason.clone(),
+                        ),
+                    };
+
                     let temps = temp.read();
 
                     let reading = Reading {
@@ -222,6 +259,7 @@ fn main() {
                                 })
                                 .collect(),
                             temp_available,
+                            temp_offerable,
                             temp_summary: match temps.package_c {
                                 Some(c) => {
                                     let zones: Vec<String> = temps

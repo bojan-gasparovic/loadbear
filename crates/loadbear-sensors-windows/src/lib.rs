@@ -15,6 +15,7 @@
 pub mod amd;
 pub mod counters;
 pub mod cpuid;
+pub mod installer;
 pub mod pawnio;
 pub mod temperature;
 
@@ -22,5 +23,6 @@ pub use amd::{
     decode_ccd_temp, decode_die_temp, is_plausible_celsius, read_amd_temperature, PciGuard,
     TemperatureReading, TemperatureZone,
 };
+pub use installer::{install, InstallError};
 pub use pawnio::{PawnIo, PawnIoError};
 pub use temperature::{Remedy, TemperatureStatus, WindowsTemperature, PAWNIO_URL};
