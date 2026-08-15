@@ -50,7 +50,11 @@ pub const LAYOUT_VERSION: u32 = 3;
 /// lifetime. Without it, a helper that predates a feature keeps running
 /// forever and the feature simply never appears, with nothing anywhere saying
 /// why. That happened once already.
-pub const HELPER_REVISION: u32 = 3;
+///
+/// Revision 4 publishes package power. Revision 3 read it correctly and then
+/// dropped it on the way into the mapping, so an unbumped revision would have
+/// left those installations showing no power for ever, silently.
+pub const HELPER_REVISION: u32 = 4;
 
 /// Maximum temperature zones carried. Renoir reports one die plus up to eight
 /// CCD slots, so sixteen is generous without being wasteful.

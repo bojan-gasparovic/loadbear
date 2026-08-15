@@ -16,7 +16,9 @@ use windows_sys::Win32::System::Memory::{
     FILE_MAP_WRITE, PAGE_READWRITE,
 };
 
-use crate::shared::{SharedTemperature, LAYOUT_VERSION, MAPPING_NAME, MAPPING_SDDL};
+use crate::shared::{
+    SharedTemperature, HELPER_REVISION, LAYOUT_VERSION, MAPPING_NAME, MAPPING_SDDL,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum MappingError {
@@ -117,16 +119,33 @@ impl TemperaturePublisher {
             (*self.view).sequence = seq; // odd: write in progress
             std::sync::atomic::fence(std::sync::atomic::Ordering::Release);
 
-            (*self.view).version = LAYOUT_VERSION;
-            (*self.view).timestamp_ms = reading.timestamp_ms;
-            (*self.view).package_c = reading.package_c;
-            (*self.view).zone_count = reading.zone_count;
-            (*self.view).zones = reading.zones;
-            (*self.view).zone_labels = reading.zone_labels;
+            self.view.write(payload(reading, seq));
 
             std::sync::atomic::fence(std::sync::atomic::Ordering::Release);
             (*self.view).sequence = seq.wrapping_add(1); // even: settled
         }
+    }
+}
+
+/// The record to write, given a reading and the in-progress sequence number.
+///
+/// Split out from [`TemperaturePublisher::publish`] because publishing needs an
+/// elevated global mapping and so cannot be tested, while this can.
+///
+/// The version and revision are stamped here rather than trusted from the
+/// caller, since they describe the binary doing the writing.
+///
+/// Everything else comes from `..*reading` on purpose. The previous version
+/// copied field by field and omitted `package_watts`, so the helper read power
+/// correctly and published the mapping's initial `NaN` on every sample for as
+/// long as it ran. Taking the rest wholesale makes that class of omission
+/// impossible rather than merely fixed once.
+fn payload(reading: &SharedTemperature, sequence: u32) -> SharedTemperature {
+    SharedTemperature {
+        sequence,
+        version: LAYOUT_VERSION,
+        helper_revision: HELPER_REVISION,
+        ..*reading
     }
 }
 
@@ -246,6 +265,65 @@ mod tests {
                 // The helper is installed and running on this machine.
             }
         }
+    }
+
+    /// A reading with a distinct value in every field, so an unwritten one
+    /// shows up as the default rather than coincidentally matching.
+    fn a_full_reading() -> SharedTemperature {
+        let mut r = SharedTemperature {
+            timestamp_ms: 123_456,
+            package_c: 64.25,
+            package_watts: 11.75,
+            zone_count: 2,
+            ..Default::default()
+        };
+        r.zones[0] = 58.5;
+        r.zones[1] = 59.0;
+        SharedTemperature::set_label(&mut r.zone_labels[0], "Core 0");
+        SharedTemperature::set_label(&mut r.zone_labels[1], "Core 1");
+        r
+    }
+
+    #[test]
+    fn every_measured_field_reaches_the_published_record() {
+        // The regression this exists for: `publish` copied field by field and
+        // left `package_watts` out, so the helper read power correctly and the
+        // interface saw NaN forever. Temperature worked throughout, which is
+        // what made it look like a sensor problem rather than a writer one.
+        let r = a_full_reading();
+        let p = payload(&r, 7);
+
+        assert_eq!(p.package_watts, 11.75, "package power must be published");
+        assert_eq!(p.package_c, 64.25);
+        assert_eq!(p.timestamp_ms, 123_456);
+        assert_eq!(p.zone_count, 2);
+        assert_eq!(p.zones[0], 58.5);
+        assert_eq!(p.zones[1], 59.0);
+        assert_eq!(p.zone_labels[0], r.zone_labels[0]);
+        assert_eq!(p.zone_list().len(), 2);
+    }
+
+    #[test]
+    fn the_payload_carries_the_writing_binarys_own_version_and_revision() {
+        // Both describe the helper doing the writing, so a caller must not be
+        // able to publish a record claiming to be some other build.
+        let mut r = a_full_reading();
+        r.version = 99;
+        r.helper_revision = 99;
+
+        let p = payload(&r, 3);
+        assert_eq!(p.version, LAYOUT_VERSION);
+        assert_eq!(p.helper_revision, HELPER_REVISION);
+        assert!(p.helper_is_current());
+    }
+
+    #[test]
+    fn the_payload_carries_the_sequence_it_was_given() {
+        // `publish` writes the whole record, so the odd in-progress sequence
+        // has to survive that write or a reader would see it settled early.
+        let p = payload(&a_full_reading(), 9);
+        assert_eq!(p.sequence, 9);
+        assert!(p.sequence % 2 != 0, "an in-progress write must read as odd");
     }
 
     #[test]

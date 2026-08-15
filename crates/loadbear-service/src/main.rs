@@ -138,35 +138,18 @@ fn probe_power() -> i32 {
     println!("first reading is absent by design: power is a difference, not a level");
     println!();
 
-    // Two orderings in one run. The helper reads temperature first and then
-    // power, and publishes NaN watts; this probe read only power and got 10 W.
-    // That is the sole difference between them, so it is the thing to test.
+    // Reads temperature first, exactly as the helper does, so the probe
+    // exercises the same call order rather than a friendlier one.
     let mut seen = 0;
-
-    println!("A: power only");
-    for i in 0..4 {
-        let now = now_ms();
-        match temp.package_watts(now) {
-            Some(w) => {
-                println!("  {i:>2}  {w:>7.2} W");
-                seen += 1;
-            }
-            None => println!("  {i:>2}        -"),
-        }
-        std::thread::sleep(Duration::from_millis(1000));
-    }
-
-    println!();
-    println!("B: temperature first, then power, exactly as the helper does");
-    for i in 0..6 {
+    for i in 0..8 {
         let now = now_ms();
         let t = temp.read();
         match temp.package_watts(now) {
             Some(w) => {
-                println!("  {i:>2}  {w:>7.2} W   (temp {:?})", t.package_c);
+                println!("  {i:>2}  {w:>7.2} W   temp {:?}", t.package_c);
                 seen += 1;
             }
-            None => println!("  {i:>2}        -     (temp {:?})", t.package_c),
+            None => println!("  {i:>2}        -     temp {:?}", t.package_c),
         }
         std::thread::sleep(Duration::from_millis(1000));
     }
@@ -176,8 +159,10 @@ fn probe_power() -> i32 {
         println!("No readings. Either this part has no RAPL counters or the driver refused.");
         return 1;
     }
-    println!("Compare against another tool's package power. On a 15 W part this");
-    println!("should sit in single digits at idle and climb into the teens under load.");
+    println!("This probe reads the sensor. It does not exercise publishing, which is");
+    println!("where package power was once lost on its way into shared memory, so a");
+    println!("healthy probe alongside no power in the interface means look at the");
+    println!("writer rather than the sensor.");
     0
 }
 
