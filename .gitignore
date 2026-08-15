@@ -13,6 +13,11 @@ dist/
 .vite/
 *.tsbuildinfo
 
+# The application has no bundler, so its `dist` is hand-written source rather
+# than build output. The rule above was swallowing the entire interface, which
+# meant a fresh clone could not produce a working window.
+!crates/loadbear-app/dist/
+
 # Environment and secrets
 .env
 .env.*

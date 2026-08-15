@@ -7,6 +7,7 @@
 //! English counter names are used via `PdhAddEnglishCounterW`, so this works on
 //! a localised Windows where the displayed names differ.
 
+use std::collections::VecDeque;
 use std::time::Duration;
 
 use windows_sys::Win32::System::Performance::{
@@ -16,6 +17,7 @@ use windows_sys::Win32::System::Performance::{
 
 const PATH_PROC_PERFORMANCE: &str = r"\Processor Information(_Total)\% Processor Performance";
 const PATH_PROC_FREQUENCY: &str = r"\Processor Information(_Total)\Processor Frequency";
+const PATH_PROC_TIME: &str = r"\Processor Information(_Total)\% Processor Time";
 const PATH_PROC_QUEUE: &str = r"\System\Processor Queue Length";
 const PATH_PAGES_INPUT: &str = r"\Memory\Pages Input/sec";
 const PATH_AVAILABLE_MB: &str = r"\Memory\Available MBytes";
@@ -29,6 +31,13 @@ pub struct CounterSample {
     pub processor_performance_pct: f64,
     /// The nominal base clock, in MHz, as the OS reports it.
     pub processor_frequency_mhz: f64,
+    /// Share of the window, 0 to 100, that processors spent executing work.
+    ///
+    /// Averaged across every logical processor, idle ones included. This is
+    /// utilization, and it is the quantity LoadBear went without for its first
+    /// session, during which the run queue was pressed into service as a proxy
+    /// and produced a diagnosis of "idle" on a machine at 97 percent.
+    pub processor_time_pct: f64,
     /// Threads waiting for a processor. Not utilization.
     pub processor_queue_length: f64,
     /// Hard page faults per second. The direct measure of stalling on memory.
@@ -85,6 +94,7 @@ impl Counters {
         let paths = [
             PATH_PROC_PERFORMANCE,
             PATH_PROC_FREQUENCY,
+            PATH_PROC_TIME,
             PATH_PROC_QUEUE,
             PATH_PAGES_INPUT,
             PATH_AVAILABLE_MB,
@@ -151,6 +161,7 @@ impl Counters {
             match *path {
                 PATH_PROC_PERFORMANCE => s.processor_performance_pct = v,
                 PATH_PROC_FREQUENCY => s.processor_frequency_mhz = v,
+                PATH_PROC_TIME => s.processor_time_pct = v,
                 PATH_PROC_QUEUE => s.processor_queue_length = v,
                 PATH_PAGES_INPUT => s.pages_input_per_sec = v,
                 PATH_AVAILABLE_MB => s.available_mbytes = v,
@@ -168,6 +179,95 @@ impl Drop for Counters {
     fn drop(&mut self) {
         // SAFETY: closing a query we opened, exactly once.
         unsafe { PdhCloseQuery(self.query) };
+    }
+}
+
+/// How many samples the rolling window holds.
+///
+/// At the application's sampling interval of 1.5 seconds this covers roughly
+/// six seconds. It is long enough to flatten the run queue, which swings
+/// between 0 and 30 from one second to the next on a machine under load, and
+/// short enough that the interface still tracks what the user is doing.
+pub const WINDOW_SAMPLES: usize = 4;
+
+/// A rolling window of samples, averaged.
+///
+/// Every counter LoadBear reads is spiky, and one of them, the run queue, is
+/// spiky enough that a single reading carries almost no information. The engine
+/// already reasons in sustained terms; this is the sensor layer doing the same
+/// so that a verdict is never decided by whichever instant it happened to land
+/// on.
+#[derive(Debug, Clone)]
+pub struct SampleWindow {
+    capacity: usize,
+    samples: VecDeque<CounterSample>,
+}
+
+impl SampleWindow {
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            capacity: capacity.max(1),
+            samples: VecDeque::with_capacity(capacity.max(1)),
+        }
+    }
+
+    pub fn push(&mut self, sample: CounterSample) {
+        if self.samples.len() == self.capacity {
+            self.samples.pop_front();
+        }
+        self.samples.push_back(sample);
+    }
+
+    pub fn len(&self) -> usize {
+        self.samples.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.samples.is_empty()
+    }
+
+    /// Whether the window has filled, so its average covers the full period.
+    ///
+    /// A partial average is still worth showing, which is why [`Self::average`]
+    /// does not wait for this. It is reported separately so a caller that wants
+    /// to claim something is *sustained* can tell the difference.
+    pub fn is_settled(&self) -> bool {
+        self.samples.len() == self.capacity
+    }
+
+    /// The mean of every sample held, or `None` when nothing has been pushed.
+    pub fn average(&self) -> Option<CounterSample> {
+        if self.samples.is_empty() {
+            return None;
+        }
+        let n = self.samples.len() as f64;
+        let mut sum = CounterSample::default();
+        for s in &self.samples {
+            sum.processor_performance_pct += s.processor_performance_pct;
+            sum.processor_frequency_mhz += s.processor_frequency_mhz;
+            sum.processor_time_pct += s.processor_time_pct;
+            sum.processor_queue_length += s.processor_queue_length;
+            sum.pages_input_per_sec += s.pages_input_per_sec;
+            sum.available_mbytes += s.available_mbytes;
+            sum.disk_seconds_per_transfer += s.disk_seconds_per_transfer;
+            sum.disk_queue_length += s.disk_queue_length;
+        }
+        Some(CounterSample {
+            processor_performance_pct: sum.processor_performance_pct / n,
+            processor_frequency_mhz: sum.processor_frequency_mhz / n,
+            processor_time_pct: sum.processor_time_pct / n,
+            processor_queue_length: sum.processor_queue_length / n,
+            pages_input_per_sec: sum.pages_input_per_sec / n,
+            available_mbytes: sum.available_mbytes / n,
+            disk_seconds_per_transfer: sum.disk_seconds_per_transfer / n,
+            disk_queue_length: sum.disk_queue_length / n,
+        })
+    }
+}
+
+impl Default for SampleWindow {
+    fn default() -> Self {
+        Self::new(WINDOW_SAMPLES)
     }
 }
 
@@ -259,6 +359,69 @@ mod tests {
         assert_eq!(stall.io, 1.0);
     }
 
+    fn sample_with_queue(queue: f64) -> CounterSample {
+        CounterSample {
+            processor_queue_length: queue,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn an_empty_window_averages_to_nothing_rather_than_zero() {
+        let w = SampleWindow::new(4);
+        assert!(w.average().is_none(), "no samples is not the same as zero");
+    }
+
+    #[test]
+    fn a_window_averages_the_samples_it_holds() {
+        let mut w = SampleWindow::new(4);
+        for q in [0.0, 30.0, 2.0, 8.0] {
+            w.push(sample_with_queue(q));
+        }
+        assert_eq!(w.average().unwrap().processor_queue_length, 10.0);
+    }
+
+    #[test]
+    fn a_window_averages_a_partial_fill_rather_than_waiting() {
+        let mut w = SampleWindow::new(4);
+        w.push(sample_with_queue(4.0));
+        w.push(sample_with_queue(6.0));
+        assert_eq!(w.average().unwrap().processor_queue_length, 5.0);
+        assert!(
+            !w.is_settled(),
+            "a partial average is usable but must not be called sustained"
+        );
+    }
+
+    #[test]
+    fn a_window_drops_the_oldest_sample_once_full() {
+        let mut w = SampleWindow::new(2);
+        w.push(sample_with_queue(100.0));
+        w.push(sample_with_queue(0.0));
+        w.push(sample_with_queue(0.0));
+        assert_eq!(w.len(), 2);
+        assert_eq!(
+            w.average().unwrap().processor_queue_length,
+            0.0,
+            "a spike must age out of the window rather than colouring it forever"
+        );
+        assert!(w.is_settled());
+    }
+
+    #[test]
+    fn averaging_a_single_spike_across_a_quiet_window_flattens_it() {
+        // This is the failure the window exists for. One sample of 30 on an
+        // otherwise quiet machine used to be the whole basis of a diagnosis.
+        let mut w = SampleWindow::new(4);
+        w.push(sample_with_queue(30.0));
+        for _ in 0..3 {
+            w.push(sample_with_queue(0.0));
+        }
+        let averaged = w.average().unwrap();
+        assert_eq!(averaged.processor_queue_length, 7.5);
+        assert!(to_stall(&averaged, 16).cpu < to_stall(&sample_with_queue(30.0), 16).cpu);
+    }
+
     #[test]
     fn counters_open_and_sample_without_elevation() {
         // This is the claim the whole unprivileged path rests on, so it is
@@ -271,6 +434,23 @@ mod tests {
             s.processor_frequency_mhz > 0.0,
             "processor frequency should report the base clock, got {}",
             s.processor_frequency_mhz
+        );
+    }
+
+    #[test]
+    fn utilization_reads_a_real_percentage_from_this_machine() {
+        // A counter that silently reports zero is indistinguishable from an
+        // idle machine, and treating one as the other is the failure that
+        // produced a wrong diagnosis. So the range is asserted rather than the
+        // call merely succeeding.
+        let c = Counters::open().expect("counters must open unprivileged");
+        let s = c
+            .sample(Duration::from_millis(300))
+            .expect("a sample must come back");
+        assert!(
+            (0.0..=100.0).contains(&s.processor_time_pct),
+            "utilization should be a percentage of the window, got {}",
+            s.processor_time_pct
         );
     }
 }

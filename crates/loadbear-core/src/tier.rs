@@ -20,7 +20,7 @@ pub enum Tier {
 }
 
 /// Stall at or above this share of the window counts as degraded.
-const STALL_BRACED: f32 = 0.40;
+pub const STALL_BRACED: f32 = 0.40;
 
 /// Stall at or above this share of the window counts as out of spec.
 ///

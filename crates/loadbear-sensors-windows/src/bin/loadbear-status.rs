@@ -12,9 +12,11 @@ use std::time::Duration;
 use loadbear_core::{
     classify, evaluate, CpuReading, Reading, SpecDb, ThrottleState, Tier, Verdict,
 };
-use loadbear_sensors_windows::counters::{to_stall, CounterSample, Counters};
+use loadbear_sensors_windows::counters::{to_stall, CounterSample, Counters, SampleWindow};
 use loadbear_sensors_windows::cpuid::{brand_string, current_cpu_key};
 use loadbear_sensors_windows::pawnio::{PawnIo, PawnIoError};
+use loadbear_sensors_windows::processes::ProcessSampler;
+use loadbear_sensors_windows::shared::now_ms;
 
 const SAMPLE_INTERVAL: Duration = Duration::from_millis(1000);
 
@@ -40,20 +42,29 @@ fn main() {
     // driver. Probe once rather than on every tick.
     let temp_status = probe_temperature();
 
+    // Averaged for the same reason the application averages: a single reading
+    // of the run queue is noise, and this is the tool used to watch the engine
+    // behave, so it must not show something the engine would never see.
+    let mut window = SampleWindow::default();
+    let mut processes = ProcessSampler::new(logical);
+
     loop {
-        let sample = match counters.sample(SAMPLE_INTERVAL) {
+        let raw = match counters.sample(SAMPLE_INTERVAL) {
             Ok(s) => s,
             Err(e) => {
                 eprintln!("Sampling failed: {e}");
                 break;
             }
         };
+        window.push(raw);
+        let sample = window.average().unwrap_or(raw);
 
         let reading = Reading {
             timestamp_ms: 0,
             stall: to_stall(&sample, logical),
             cpu: CpuReading {
                 all_core_mhz: sample.actual_mhz(),
+                utilization_pct: Some(sample.processor_time_pct as f32),
                 package_watts: None,
                 package_temp_c: None,
                 tjmax_c: spec.and_then(|s| s.tjmax_c),
@@ -62,7 +73,8 @@ fn main() {
                     reason: None,
                 },
             },
-            processes: vec![],
+            processes: processes.sample(now_ms()),
+            containers: vec![],
         };
 
         let verdicts = evaluate(&reading, spec);

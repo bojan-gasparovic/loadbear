@@ -14,11 +14,16 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use loadbear_core::{classify, evaluate, CpuReading, Reading, SpecDb, ThrottleState, Tier};
-use loadbear_sensors_windows::counters::{to_stall, Counters};
+use loadbear_core::{
+    classify, diagnose, evaluate, ContainerReading, CpuReading, Reading, SpecDb, ThrottleState,
+    Tier,
+};
+use loadbear_sensors_windows::counters::{to_stall, Counters, SampleWindow};
 use loadbear_sensors_windows::cpuid::{brand_string, current_cpu_key};
+use loadbear_sensors_windows::docker;
 use loadbear_sensors_windows::installer;
 use loadbear_sensors_windows::mapping::TemperatureReader;
+use loadbear_sensors_windows::processes::ProcessSampler;
 use loadbear_sensors_windows::service_control;
 use loadbear_sensors_windows::shared::{now_ms, SharedTemperature};
 use serde::Serialize;
@@ -35,6 +40,22 @@ struct VerdictView {
     severity: String,
     detail: String,
     basis: String,
+    /// What is responsible, when the evidence supports naming it.
+    ///
+    /// Absent is a real and common answer rather than a gap waiting to be
+    /// filled, so the interface says so plainly instead of leaving a blank.
+    cause: Option<String>,
+    /// What the user can do about it, phrased as the thing they do.
+    action: Option<String>,
+}
+
+/// A container as the interface shows it.
+#[derive(Debug, Clone, Serialize)]
+struct ContainerView {
+    name: String,
+    memory_mb: f64,
+    limit_mb: Option<f64>,
+    cpu: f32,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -48,6 +69,7 @@ struct Status {
     tdp_watts: u32,
     mhz: Option<u32>,
     logical: u32,
+    utilization: f64,
     queue: f64,
     available_mb: f64,
     hard_faults: f64,
@@ -57,6 +79,12 @@ struct Status {
     stall_memory: f32,
     stall_io: f32,
     verdicts: Vec<VerdictView>,
+    /// The heaviest few processes, for the panel that shows what is running.
+    top: Vec<(String, f32, f64)>,
+    containers: Vec<ContainerView>,
+    /// Whether a container runtime answered at all, which is different from
+    /// answering that nothing is running.
+    docker_present: bool,
     temp_available: bool,
     /// Whether the unavailable state is one the user can act on.
     temp_offerable: bool,
@@ -79,6 +107,7 @@ impl Default for Status {
             tdp_watts: 0,
             mhz: None,
             logical: 1,
+            utilization: 0.0,
             queue: 0.0,
             available_mb: 0.0,
             hard_faults: 0.0,
@@ -88,6 +117,9 @@ impl Default for Status {
             stall_memory: 0.0,
             stall_io: 0.0,
             verdicts: vec![],
+            top: vec![],
+            containers: vec![],
+            docker_present: false,
             temp_available: false,
             temp_offerable: false,
             temp_summary: String::new(),
@@ -98,6 +130,18 @@ impl Default for Status {
 }
 
 type Shared = Arc<Mutex<Status>>;
+
+/// The last answer the container runtime gave.
+///
+/// Behind its own lock and refreshed by its own thread, because asking Docker
+/// blocks and the loop that produces the tier must not.
+type Containers = Arc<Mutex<Vec<ContainerReading>>>;
+
+/// How often the container list is refreshed.
+///
+/// Slower than the sampling loop on purpose. Container memory does not move on
+/// a one second timescale, and every refresh is one request per container.
+const DOCKER_POLL: Duration = Duration::from_secs(10);
 
 /// Set when temperature needs re-probing, which is after an install.
 ///
@@ -141,6 +185,50 @@ async fn enable_temperature() -> Result<String, String> {
     .map_err(|_| "the installer could not be started".to_string())?
 }
 
+/// The remediation as a sentence naming the thing the user does.
+///
+/// Every variant has to end in an action. A finding that cannot be phrased this
+/// way has no remediation and is not allowed to interrupt anyone, which is the
+/// rule the enum exists to enforce.
+fn remediation_text(r: loadbear_core::Remediation) -> String {
+    use loadbear_core::Remediation::*;
+    match r {
+        Stop => "Stop it, if you no longer need it running.",
+        ReconfigureLimit => "Lower what it is allowed to take, in Docker Desktop or .wslconfig.",
+        AddExclusion => "Exclude your build directory from it.",
+        Defer => "Postpone it until you have finished.",
+        ChangePowerState => "Plug in, or change the power profile.",
+        Physical => "Check airflow and clear any dust.",
+    }
+    .to_string()
+}
+
+/// The heaviest few processes, by CPU then by memory.
+///
+/// Shown so the user can see what LoadBear saw. This is not the attribution:
+/// the panel lists whatever is running, whereas a cause is only named when the
+/// evidence clears the bar in `loadbear_core::attribution`. A user comparing
+/// the two should be able to see why LoadBear declined to name anything.
+fn top_processes(reading: &Reading) -> Vec<(String, f32, f64)> {
+    let mut groups = loadbear_core::group_by_name(&reading.processes);
+    groups.sort_by(|a, b| {
+        b.cpu_percent
+            .total_cmp(&a.cpu_percent)
+            .then(b.working_set_bytes.cmp(&a.working_set_bytes))
+    });
+    groups
+        .iter()
+        .take(6)
+        .map(|g| {
+            (
+                g.label(),
+                g.cpu_percent,
+                g.working_set_bytes as f64 / 1_048_576.0,
+            )
+        })
+        .collect()
+}
+
 fn tray_icon(tier: Tier) -> Option<Image<'static>> {
     let bytes: &[u8] = match tier {
         Tier::Easy => include_bytes!("../icons/bear-easy-32.png"),
@@ -180,6 +268,19 @@ fn main() {
             let shared = shared.clone();
             let handle = app.handle().clone();
 
+            // Docker gets its own thread. A named pipe read has no timeout, so
+            // a wedged engine parked on this thread costs a stale container
+            // list and nothing else.
+            let containers: Containers = Arc::new(Mutex::new(Vec::new()));
+            let docker_containers = containers.clone();
+            std::thread::spawn(move || loop {
+                let fresh = docker::read_containers();
+                if let Ok(mut c) = docker_containers.lock() {
+                    *c = fresh;
+                }
+                std::thread::sleep(DOCKER_POLL);
+            });
+
             std::thread::spawn(move || {
                 let Ok(counters) = Counters::open() else {
                     eprintln!("LoadBear could not open performance counters.");
@@ -202,10 +303,18 @@ fn main() {
 
                 let mut last_tier = Tier::Easy;
 
+                // Every counter LoadBear reads is spiky and the run queue is
+                // extremely so. Verdicts are decided on the averaged sample,
+                // never on whichever instant the loop happened to land on.
+                let mut window = SampleWindow::default();
+                let mut process_sampler = ProcessSampler::new(logical);
+
                 loop {
-                    let Ok(sample) = counters.sample(SAMPLE_INTERVAL) else {
+                    let Ok(raw) = counters.sample(SAMPLE_INTERVAL) else {
                         continue;
                     };
+                    window.push(raw);
+                    let sample = window.average().unwrap_or(raw);
 
                     if REPROBE.swap(false, Ordering::Relaxed) || reader.is_none() {
                         reader = TemperatureReader::open().ok();
@@ -259,6 +368,7 @@ fn main() {
                         stall: to_stall(&sample, logical),
                         cpu: CpuReading {
                             all_core_mhz: sample.actual_mhz(),
+                            utilization_pct: Some(sample.processor_time_pct as f32),
                             package_watts: None,
                             package_temp_c: published.as_ref().and_then(|s| s.package()),
                             tjmax_c: spec.as_ref().and_then(|s| s.tjmax_c),
@@ -267,11 +377,19 @@ fn main() {
                                 reason: None,
                             },
                         },
-                        processes: vec![],
+                        processes: process_sampler.sample(now_ms()),
+                        containers: containers
+                            .lock()
+                            .map(|c| c.clone())
+                            .unwrap_or_default(),
                     };
 
                     let verdicts = evaluate(&reading, spec.as_ref());
                     let tier = classify(&verdicts, &reading.stall);
+                    // Attribution runs over the same reading the verdicts came
+                    // from, so a finding can never name a cause measured at a
+                    // different moment from the state it explains.
+                    let findings = diagnose(&reading, verdicts);
 
                     if tier != last_tier {
                         if let Some(icon) = tray_icon(tier) {
@@ -292,6 +410,7 @@ fn main() {
                             tdp_watts: spec.as_ref().map(|s| s.tdp_watts).unwrap_or(0),
                             mhz: reading.cpu.all_core_mhz,
                             logical,
+                            utilization: sample.processor_time_pct,
                             queue: sample.processor_queue_length,
                             available_mb: sample.available_mbytes,
                             hard_faults: sample.pages_input_per_sec,
@@ -300,15 +419,31 @@ fn main() {
                             stall_cpu: reading.stall.cpu,
                             stall_memory: reading.stall.memory,
                             stall_io: reading.stall.io,
-                            verdicts: verdicts
+                            verdicts: findings
                                 .iter()
-                                .map(|v| VerdictView {
-                                    kind: format!("{:?}", v.kind),
-                                    severity: format!("{:?}", v.severity),
-                                    detail: v.detail.clone(),
-                                    basis: v.basis.clone(),
+                                .map(|f| VerdictView {
+                                    kind: format!("{:?}", f.verdict.kind),
+                                    severity: format!("{:?}", f.verdict.severity),
+                                    detail: f.verdict.detail.clone(),
+                                    basis: f.verdict.basis.clone(),
+                                    cause: f.cause.as_ref().map(|c| c.label.clone()),
+                                    action: f.remediation.map(remediation_text),
                                 })
                                 .collect(),
+                            top: top_processes(&reading),
+                            containers: reading
+                                .containers
+                                .iter()
+                                .map(|c| ContainerView {
+                                    name: c.name.clone(),
+                                    memory_mb: c.memory_bytes as f64 / 1_048_576.0,
+                                    limit_mb: c
+                                        .memory_limit_bytes
+                                        .map(|l| l as f64 / 1_048_576.0),
+                                    cpu: c.cpu_percent,
+                                })
+                                .collect(),
+                            docker_present: !reading.containers.is_empty(),
                             temp_available,
                             temp_offerable,
                             temp_summary: match published.as_ref().and_then(|s| s.package()) {

@@ -7,8 +7,9 @@ machine actually did.
 ## Where it got to
 
 It runs. `loadbear-app.exe` is a Tauri tray application showing tier, clock
-against guaranteed base clock, stall bars, findings with their basis, and CPU
-temperature including per-core. 79 tests, clippy and rustfmt clean.
+against guaranteed base clock, utilization, stall bars, findings with their
+basis and their cause, the heaviest processes, any containers, and CPU
+temperature including per-core. 126 tests, clippy and rustfmt clean.
 
 ```
 cd context-library/hobby-projects/loadbear
@@ -85,22 +86,48 @@ absence rather than error.
   reader must still be able to detect the mismatch. `version` is the first
   field and must stay there.
 
+## Done since, 2026-08-15
+
+**Attribution and utilization, LB-16 and LB-17.** 126 tests, clippy and rustfmt
+clean, and the application runs.
+
+- Utilization is measured (`% Processor Time`) and counters average over a four
+  sample window. `BelowBaseClock` now fires only above 80% utilization, because
+  Windows averages frequency across parked cores and a half-idle machine reads
+  below base for reasons that are not a fault.
+- Processes are enumerated unprivileged and ranked in
+  `loadbear-core/src/attribution.rs`. Containers come from the Docker Engine
+  API over the named pipe, polled on its own thread because a pipe read has no
+  timeout.
+- Attribution withholds a cause rather than guessing: minimum share, dominance
+  over the runner-up, coverage against measured utilization, and grouping by
+  name so a build of twelve compilers reads as one contributor.
+
+The number worth knowing: **unprivileged process coverage is 0.39 at idle and
+0.92 under load.** The idle gap is kernel and interrupt time belonging to no
+process. Attribution only runs when something is wrong, which is where coverage
+is good. Do not raise privileges to close it.
+
 ## What is not done
 
 Roughly in the order I would pick it up.
 
-1. **Attribution.** The whole thesis is "here is what is causing it" and none
-   of it exists. Process level and Docker via its socket API. Without this it is
-   a nicer Task Manager.
-2. **Utilization is not measured at all.** Only the run queue, which is why an
-   earlier diagnosis got "your machine is idle" badly wrong on a machine at 97%.
-3. **Single-sample noise.** Queue length swings between 0 and 30 second to
-   second. Everything should average over several samples.
-4. **Notifications.** The interruption contract is fully built and tested in
-   `loadbear-core` and nothing calls it.
-5. **The sample store**, which v1 scope said to write from day one.
-6. **Intel temperature.** Module loads, path is reachable, code unwritten.
-7. **macOS and Linux backends.** Designed for, not started.
+1. **Notifications.** The interruption contract is fully built and tested in
+   `loadbear-core`, attribution now feeds it real causes, and nothing calls it.
+   This is the smallest remaining step to the product working end to end.
+2. **Per-process hard faults.** I/O attribution is written but always returns
+   nothing, because Windows exposes no documented per-process hard fault rate
+   and `PageFaultCount` conflates soft with hard. Needs a real source, probably
+   ETW, or it stays silent.
+3. **Docker CPU is always zero.** `one-shot=true` ships no `precpu_stats`
+   baseline. Memory is exact and is what the exemplar finding turns on, so this
+   is a gap rather than a break. Fixing it means keeping a previous sample the
+   way `ProcessSampler` does.
+4. **The sample store**, which v1 scope said to write from day one.
+5. **Intel temperature.** Module loads, path is reachable, code unwritten.
+   Needs an Intel machine to verify.
+6. **macOS and Linux backends.** Designed for, not started. The Docker
+   transport is the only platform-specific part of container attribution.
 
 ## Things to remove or revisit
 

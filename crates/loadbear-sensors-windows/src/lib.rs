@@ -15,10 +15,12 @@
 pub mod amd;
 pub mod counters;
 pub mod cpuid;
+pub mod docker;
 pub mod installer;
 pub mod mapping;
 pub mod pawnio;
 pub mod pm_table;
+pub mod processes;
 pub mod service_control;
 pub mod shared;
 pub mod temperature;
@@ -27,10 +29,12 @@ pub use amd::{
     decode_ccd_temp, decode_die_temp, is_plausible_celsius, read_amd_temperature, PciGuard,
     TemperatureReading, TemperatureZone,
 };
+pub use docker::read_containers;
 pub use installer::{install, InstallError};
 pub use mapping::{MappingError, TemperaturePublisher, TemperatureReader};
 pub use pawnio::{PawnIo, PawnIoError};
 pub use pm_table::PerCoreTemperature;
+pub use processes::ProcessSampler;
 pub use service_control::{install_and_start, is_running, ServiceError};
 pub use shared::{SharedTemperature, MAPPING_NAME};
 pub use temperature::{Remedy, TemperatureStatus, WindowsTemperature, PAWNIO_URL};

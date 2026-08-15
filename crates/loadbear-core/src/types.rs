@@ -68,6 +68,13 @@ pub struct ThrottleState {
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct CpuReading {
     pub all_core_mhz: Option<u32>,
+    /// Share of the window, 0 to 100, that processors spent executing work.
+    ///
+    /// Averaged across every logical processor, idle ones included. This is
+    /// utilization, which LoadBear does not judge a machine by, and needs
+    /// anyway: a clock guarantee can only be tested while the processor is
+    /// being asked for performance. See [`crate::verdict`].
+    pub utilization_pct: Option<f32>,
     pub package_watts: Option<f32>,
     pub package_temp_c: Option<f32>,
     pub tjmax_c: Option<f32>,
@@ -75,6 +82,10 @@ pub struct CpuReading {
 }
 
 /// A single process, as seen by the platform backend.
+///
+/// `cpu_percent` is a share of the whole machine, not of one core, so the
+/// figures across a process list are comparable with each other and with the
+/// machine's own utilization.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProcessReading {
     pub pid: u32,
@@ -82,6 +93,27 @@ pub struct ProcessReading {
     pub working_set_bytes: u64,
     pub hard_faults_per_sec: Option<f32>,
     pub cpu_percent: f32,
+}
+
+/// A single container, read from the container runtime rather than the OS.
+///
+/// This is a second source and not a refinement of process attribution. On
+/// Windows every container on the machine presents as one `vmmem` process, so
+/// the OS can report that Docker holds eleven gigabytes and can never report
+/// which container holds it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ContainerReading {
+    pub id: String,
+    pub name: String,
+    pub cpu_percent: f32,
+    pub memory_bytes: u64,
+    /// The container's own memory limit, when one is set.
+    ///
+    /// Present only when the runtime reports a real limit. A container running
+    /// against its limit needs the limit changed; one merely using a lot of
+    /// memory needs stopping. The two are different remediations, so the
+    /// difference is carried rather than assumed.
+    pub memory_limit_bytes: Option<u64>,
 }
 
 /// One normalized observation of machine state.
@@ -94,6 +126,9 @@ pub struct Reading {
     pub stall: StallSignal,
     pub cpu: CpuReading,
     pub processes: Vec<ProcessReading>,
+    /// Empty when no container runtime is present, which is the common case
+    /// and not an error.
+    pub containers: Vec<ContainerReading>,
 }
 
 #[cfg(test)]

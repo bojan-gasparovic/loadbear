@@ -43,6 +43,22 @@ pub struct Verdict {
 /// being available, which is information, not a fault.
 const THERMAL_HEADROOM_LOW_C: f32 = 5.0;
 
+/// Utilization below which the base clock guarantee cannot be tested.
+///
+/// This is not a threshold on a fault, and it can only ever make LoadBear
+/// quieter. It exists because of how the underlying measurement is defined:
+/// the all-core frequency is averaged across every logical processor including
+/// idle ones, and an idle processor is clocked down because that is correct
+/// behaviour rather than a failure. On a half-idle machine the average is
+/// dragged below base by cores doing nothing wrong, so a `BelowBaseClock`
+/// verdict there would be reporting power management working as designed.
+///
+/// Only when nearly every processor is being asked for work does the average
+/// reflect what the working cores actually sustain, which is the thing the
+/// vendor guarantees. The figure is deliberately conservative: the correctness
+/// bar treats a confident wrong verdict as worse than a missed one.
+const MIN_UTILIZATION_FOR_BASE_CLOCK_PCT: f32 = 80.0;
+
 /// Evaluate every absolute check that the available data supports.
 ///
 /// `spec` is optional because OEM-exclusive parts frequently have no published
@@ -83,8 +99,18 @@ pub fn evaluate(reading: &Reading, spec: Option<&CpuSpec>) -> Vec<Verdict> {
         return verdicts;
     };
 
-    if let Some(mhz) = reading.cpu.all_core_mhz {
+    // Utilization is required rather than optional here. Absent, the machine
+    // cannot be said to be asking for performance, and the check is skipped so
+    // that a backend which cannot measure demand yet stays silent instead of
+    // flagging every idle machine it sees.
+    let under_demand = reading
+        .cpu
+        .utilization_pct
+        .is_some_and(|u| u >= MIN_UTILIZATION_FOR_BASE_CLOCK_PCT);
+
+    if let (Some(mhz), true) = (reading.cpu.all_core_mhz, under_demand) {
         if mhz < spec.base_mhz {
+            let utilization = reading.cpu.utilization_pct.unwrap_or_default();
             verdicts.push(Verdict {
                 kind: VerdictKind::BelowBaseClock,
                 severity: Severity::OutOfSpec,
@@ -93,7 +119,7 @@ pub fn evaluate(reading: &Reading, spec: Option<&CpuSpec>) -> Vec<Verdict> {
                     spec.base_mhz
                 ),
                 basis: format!(
-                    "{} publishes {} MHz as the base clock, which the vendor guarantees at the rated TDP.",
+                    "{} publishes {} MHz as the base clock, which the vendor guarantees at the rated TDP. Measured at {utilization:.0} percent utilization, so the processor is being asked for it.",
                     spec.name, spec.base_mhz
                 ),
             });
@@ -152,12 +178,18 @@ mod tests {
             },
             cpu,
             processes: vec![],
+            containers: vec![],
         }
     }
 
+    /// A machine under real load and behaving correctly.
+    ///
+    /// Utilization is high because that is the only state in which the base
+    /// clock guarantee can be tested at all.
     fn healthy_cpu() -> CpuReading {
         CpuReading {
             all_core_mhz: Some(2400),
+            utilization_pct: Some(95.0),
             package_watts: Some(15.0),
             package_temp_c: Some(70.0),
             tjmax_c: Some(105.0),
@@ -252,9 +284,74 @@ mod tests {
     }
 
     #[test]
+    fn an_idle_machine_clocked_below_base_is_not_out_of_spec() {
+        // The regression this guards. Windows averages frequency across every
+        // logical processor, so an idle machine reads far below base because
+        // its cores are parked, which is power management working. Flagging it
+        // would make the strongest verdict LoadBear has fire constantly on a
+        // machine doing nothing at all.
+        let mut cpu = healthy_cpu();
+        cpu.all_core_mhz = Some(900);
+        cpu.utilization_pct = Some(3.0);
+        let verdicts = evaluate(&reading(cpu), Some(&spec()));
+        assert!(
+            !verdicts
+                .iter()
+                .any(|v| v.kind == VerdictKind::BelowBaseClock),
+            "a guarantee about performance under load says nothing about an idle machine"
+        );
+    }
+
+    #[test]
+    fn a_partly_loaded_machine_clocked_below_base_is_not_out_of_spec() {
+        let mut cpu = healthy_cpu();
+        cpu.all_core_mhz = Some(1400);
+        cpu.utilization_pct = Some(45.0);
+        let verdicts = evaluate(&reading(cpu), Some(&spec()));
+        assert!(
+            !verdicts
+                .iter()
+                .any(|v| v.kind == VerdictKind::BelowBaseClock),
+            "idle cores drag the all-core average down, so this figure is not evidence of a fault"
+        );
+    }
+
+    #[test]
+    fn without_a_utilization_figure_the_base_clock_cannot_be_judged() {
+        let mut cpu = healthy_cpu();
+        cpu.all_core_mhz = Some(1400);
+        cpu.utilization_pct = None;
+        let verdicts = evaluate(&reading(cpu), Some(&spec()));
+        assert!(
+            !verdicts
+                .iter()
+                .any(|v| v.kind == VerdictKind::BelowBaseClock),
+            "a backend that cannot measure demand must stay silent rather than assume load"
+        );
+    }
+
+    #[test]
+    fn the_basis_records_the_utilization_the_verdict_was_measured_at() {
+        let mut cpu = healthy_cpu();
+        cpu.all_core_mhz = Some(1400);
+        cpu.utilization_pct = Some(97.0);
+        let verdicts = evaluate(&reading(cpu), Some(&spec()));
+        let v = verdicts
+            .iter()
+            .find(|v| v.kind == VerdictKind::BelowBaseClock)
+            .expect("must flag below base clock under real load");
+        assert!(
+            v.basis.contains("97 percent"),
+            "the demand the verdict rests on belongs in its basis, got: {}",
+            v.basis
+        );
+    }
+
+    #[test]
     fn missing_optional_readings_produce_no_verdicts_rather_than_panicking() {
         let cpu = CpuReading {
             all_core_mhz: None,
+            utilization_pct: None,
             package_watts: None,
             package_temp_c: None,
             tjmax_c: None,
