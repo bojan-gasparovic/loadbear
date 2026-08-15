@@ -18,7 +18,8 @@
         "maximizable": false,
         "minimizable": true,
         "fullscreen": false,
-        "alwaysOnTop": true
+        "alwaysOnTop": true,
+        "theme": "Light"
       }
     ],
     "security": {

@@ -5,15 +5,26 @@
 <title>LoadBear</title>
 <style>
   :root {
-    --bg: #0e0f12;
-    --panel: #16181d;
-    --line: #23262d;
-    --text: #e8eaed;
-    --dim: #9aa0aa;
-    --faint: #6b717b;
-    --easy: #4ea87a;
-    --braced: #c9973f;
-    --strained: #cf5a4e;
+    --bg: #f6f7f9;
+    --panel: #ffffff;
+    --line: #e3e6eb;
+    --text: #16191e;
+    --dim: #565d68;
+    --faint: #848b96;
+    --hair: #a8aeb8;
+    --well: #eaedf1;
+
+    /* Darkened from their dark mode values. The same green on white does not
+       carry the same weight it did on near black, and these three are the only
+       thing telling the user how the machine is doing. */
+    --easy: #2e7d55;
+    --braced: #96680f;
+    --strained: #b13b2f;
+
+    /* The graph, kept apart from the tier colours so a busy but healthy
+       machine does not read as a warning. */
+    --plot-fill: #dbe6f2;
+    --plot-line: #4a7ba7;
   }
   * { box-sizing: border-box; }
 
@@ -35,7 +46,13 @@
   }
 
   header { display: grid; grid-template-columns: 46px auto 1fr auto; align-items: center; gap: 13px; }
-  #bear { width: 46px; height: 46px; opacity: .95; }
+  /* The artwork is a flat white silhouette with only its alpha carrying
+     shape, so it is invisible on a light background as an image. Painted
+     through a mask it takes the tier colour, which loses nothing and puts the
+     state in the one element the eye lands on first. */
+  #bear { width: 46px; height: 46px; background-color: var(--faint);
+          -webkit-mask-size: contain; -webkit-mask-repeat: no-repeat;
+          -webkit-mask-position: center; transition: background-color .3s ease; }
   .title { font-size: 10px; letter-spacing: .16em; text-transform: uppercase; color: var(--faint); }
   #tier { font-size: 23px; font-weight: 620; letter-spacing: -.01em; line-height: 1.1; }
   #tier.easy { color: var(--easy); }
@@ -67,14 +84,14 @@
   .bars { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; }
   .bar .lab { font-size: 9.5px; color: var(--faint); text-transform: uppercase;
               letter-spacing: .07em; margin-bottom: 4px; display: flex; justify-content: space-between; }
-  .bar .track { height: 4px; background: #1e2127; border-radius: 2px; overflow: hidden; }
+  .bar .track { height: 4px; background: var(--well); border-radius: 2px; overflow: hidden; }
   .bar .fill { height: 100%; width: 0%; background: var(--dim); transition: width .35s ease, background .35s ease; }
   .bar.hot .fill { background: var(--braced); }
   .bar.max .fill { background: var(--strained); }
 
   h2 { font-size: 9.5px; letter-spacing: .13em; text-transform: uppercase; color: var(--faint);
        margin: 0 0 6px; font-weight: 600; }
-  h2 .hint { font-weight: 400; text-transform: none; letter-spacing: 0; color: #4c525b; }
+  h2 .hint { font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--hair); }
 
   .graph svg { width: 100%; height: 50px; display: block;
                background: var(--panel); border: 1px solid var(--line); border-radius: 7px 7px 0 0; }
@@ -82,10 +99,11 @@
                   border-top: 0; border-radius: 0 0 7px 7px; overflow: hidden; background: var(--panel); }
   .graph .strip i { flex: 1 1 0; }
   .graph .cap { display: flex; justify-content: space-between; font-size: 9.5px;
-                color: #4c525b; margin-top: 4px; }
+                color: var(--hair); margin-top: 4px; }
 
   #verdicts { overflow: hidden; }
   .verdict { border-left: 2px solid var(--strained); background: var(--panel);
+             border: 1px solid var(--line); border-left: 2px solid var(--strained);
              border-radius: 0 5px 5px 0; padding: 7px 10px; margin-bottom: 6px; }
   .verdict.degraded { border-left-color: var(--braced); }
   .verdict .vk { font-size: 11px; font-weight: 620; margin-bottom: 2px; }
@@ -102,39 +120,39 @@
               font-size: 11px; padding: 3px 0; align-items: baseline; }
   .plist .p .pn { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .plist .p .pv { text-align: right; color: var(--dim); font-variant-numeric: tabular-nums; }
-  .plist .p.head { color: #4c525b; font-size: 9px; text-transform: uppercase; letter-spacing: .05em; }
-  .plist .p.head .pv { color: #4c525b; }
+  .plist .p.head { color: var(--hair); font-size: 9px; text-transform: uppercase; letter-spacing: .05em; }
+  .plist .p.head .pv { color: var(--hair); }
   /* A container is drawn as a child of the Docker row above it, because that
      is exactly what it is: the thing Windows could see, opened up. */
   .plist .p.container .pn { padding-left: 13px; color: var(--dim); position: relative; }
-  .plist .p.container .pn::before { content: "\21B3"; position: absolute; left: 1px; color: #4c525b; }
+  .plist .p.container .pn::before { content: "\21B3"; position: absolute; left: 1px; color: var(--hair); }
 
   /* Temperature lives in the header rather than in a panel of its own. Per
-     core tiles and nothing else: the package figure was the average of what
-     these already say, so it cost a line and told nobody anything new. */
-  #temp { justify-self: end; text-align: right; max-width: 250px; }
-  #zones { display: none; grid-template-columns: repeat(4, 38px); gap: 3px; }
-  #zones .z { background: #1b1e24; border-radius: 4px; padding: 2px 3px; text-align: center; }
-  #zones .zl { font-size: 8px; color: #4c525b; letter-spacing: .03em; line-height: 1.2; }
+     core tiles and nothing else, in a single row: the package figure was the
+     average of what these already say, so it cost a line to repeat them. */
+  #temp { justify-self: end; text-align: right; max-width: 290px; }
+  #zones { display: none; grid-template-columns: repeat(8, 31px); gap: 3px; }
+  #zones .z { background: var(--well); border-radius: 4px; padding: 2px 3px; text-align: center; }
+  #zones .zl { font-size: 8px; color: var(--faint); letter-spacing: .03em; line-height: 1.2; }
   #zones .zv { font-size: 11px; font-variant-numeric: tabular-nums; line-height: 1.25; }
   #zones .z.hot .zv { color: var(--braced); }
   #zones .z.max .zv { color: var(--strained); }
   #temp-note { font-size: 10.5px; color: var(--faint); line-height: 1.4; }
   #enable { margin-top: 6px; display: none; font: inherit; font-size: 10.5px; font-weight: 560;
-            color: #0e0f12; background: var(--text); border: 0; border-radius: 5px;
+            color: #ffffff; background: var(--text); border: 0; border-radius: 5px;
             padding: 4px 10px; cursor: pointer; }
-  #enable:hover:not(:disabled) { background: #fff; }
+  #enable:hover:not(:disabled) { background: #3a424e; }
   #enable:disabled { opacity: .5; cursor: default; }
   #enable-note { display: none; margin-top: 5px; font-size: 10px; color: var(--faint); }
   #enable-note.bad { color: var(--strained); }
 
-  footer { font-size: 10px; color: #3f444c; display: flex; justify-content: space-between; }
+  footer { font-size: 10px; color: var(--hair); display: flex; justify-content: space-between; }
 </style>
 </head>
 <body>
 <div id="app">
   <header>
-    <img id="bear" src="bear-easy-128.png" alt="" />
+    <div id="bear" role="img" aria-label="LoadBear"></div>
     <div>
       <div class="title">LoadBear</div>
       <div id="tier" class="easy">Easy</div>
@@ -177,7 +195,7 @@
         <div class="strip" id="strip"></div>
         <div class="cap">
           <span>5 min ago</span>
-          <span><b style="color:#5b7fa3">&#9473;</b> load &nbsp; <b style="color:#cf5a4e">&#9473;</b> stall &nbsp; strip: tier</span>
+          <span><b style="color:var(--plot-line)">&#9473;</b> load &nbsp; <b style="color:var(--strained)">&#9473;</b> stall &nbsp; strip: tier</span>
           <span>now</span>
         </div>
       </div>
@@ -216,7 +234,12 @@ function bar(el, v) {
   el.classList.toggle('max', v >= 0.80);
 }
 
-const TIER_COLOR = ['#4ea87a', '#c9973f', '#cf5a4e'];
+// Read from the stylesheet rather than repeated here, so the strip, the bear
+// and the tier word can never disagree about what Braced looks like.
+const css = getComputedStyle(document.documentElement);
+const ink = name => css.getPropertyValue(name).trim();
+const TIER_COLOR = [ink('--easy'), ink('--braced'), ink('--strained')];
+const TIER_INDEX = { easy: 0, braced: 1, strained: 2 };
 
 // Utilization as an area, the worst stall over it, and a strip underneath
 // showing what the tier actually was at each tick.
@@ -227,7 +250,7 @@ const TIER_COLOR = ['#4ea87a', '#c9973f', '#cf5a4e'];
 function drawGraph(history) {
   const svg = $('chart'), strip = $('strip');
   if (!history || history.length < 2) {
-    svg.innerHTML = '<text x="100" y="55" fill="#4c525b" font-size="9" text-anchor="middle">collecting</text>';
+    svg.innerHTML = `<text x="100" y="55" fill="${ink('--hair')}" font-size="9" text-anchor="middle">collecting</text>`;
     strip.innerHTML = '';
     return;
   }
@@ -241,9 +264,9 @@ function drawGraph(history) {
   const stall = line(h => Math.max(h.cpu, h.memory, h.io));
 
   svg.innerHTML =
-    `<polygon points="0,100 ${util} 200,100" fill="#2a3f52" opacity=".5" />` +
-    `<polyline points="${util}" fill="none" stroke="#5b7fa3" stroke-width="1" vector-effect="non-scaling-stroke" />` +
-    `<polyline points="${stall}" fill="none" stroke="#cf5a4e" stroke-width="1" stroke-opacity=".85" vector-effect="non-scaling-stroke" />`;
+    `<polygon points="0,100 ${util} 200,100" fill="${ink('--plot-fill')}" />` +
+    `<polyline points="${util}" fill="none" stroke="${ink('--plot-line')}" stroke-width="1" vector-effect="non-scaling-stroke" />` +
+    `<polyline points="${stall}" fill="none" stroke="${ink('--strained')}" stroke-width="1" stroke-opacity=".9" vector-effect="non-scaling-stroke" />`;
 
   strip.innerHTML = history.map(h =>
     `<i style="background:${TIER_COLOR[h.tier] || TIER_COLOR[0]}"></i>`).join('');
@@ -254,8 +277,8 @@ function drawGraph(history) {
 const VERDICT_SLOTS = 2;
 const CONTRIBUTOR_SLOTS = 6;
 
-// Two rows of four. More cores than this and the rest are left off rather than
-// allowed to push the header taller, because the header is a fixed slot.
+// One row. More cores than this and the rest are left off rather than allowed
+// to wrap and push the header taller, because the header is a fixed slot.
 const CORE_TILES = 8;
 
 // Tiles for cores and nothing else. The package figure is an average of what
@@ -292,7 +315,9 @@ function render(s) {
   const tier = s.tier.toLowerCase();
   $('tier').textContent = s.tier;
   $('tier').className = tier;
-  $('bear').src = 'bear-' + tier + '-128.png';
+  const bear = $('bear');
+  bear.style.webkitMaskImage = `url('bear-${tier}-128.png')`;
+  bear.style.backgroundColor = TIER_COLOR[TIER_INDEX[tier] ?? 0];
   $('why').textContent = s.reason;
 
   $('brand').textContent = s.brand || 'Unknown processor';
