@@ -258,7 +258,7 @@
       </div>
 
       <div id="contributors-block">
-        <h2 id="contrib-head">Using the most</h2>
+        <h2 id="contrib-head">Heaviest processes</h2>
         <div class="plist" id="contributors"></div>
       </div>
     </div>
@@ -347,6 +347,10 @@ const CONTRIB_HEAD = {
   memory: 'Holding the most memory',
   disk: 'Holding the most memory',
 };
+
+// With no bottleneck there is no resource to name, and "Using the most" on its
+// own is a dangling phrase over an empty box.
+const CONTRIB_HEAD_IDLE = 'Heaviest processes';
 
 // Tiles for cores and nothing else. The package figure is an average of what
 // the tiles already show, so it took a line to repeat them.
@@ -445,7 +449,7 @@ function render(s) {
 
   // Filled only when a resource is under pressure, but the panel is always
   // there. A list that appears and disappears moves everything under it.
-  $('contrib-head').textContent = CONTRIB_HEAD[s.driver] || 'Using the most';
+  $('contrib-head').textContent = CONTRIB_HEAD[s.driver] || CONTRIB_HEAD_IDLE;
   $('contributors').innerHTML = !s.contributors.length ? ''
     : '<div class="p head"><div class="pn">name</div><div class="pv">cpu</div><div class="pv">memory</div></div>'
       + s.contributors.slice(0, CONTRIBUTOR_SLOTS).map(c => `
