@@ -82,7 +82,7 @@
 
   #cpu { padding-bottom: 10px; border-bottom: 1px solid var(--line); }
   #brand { font-size: 12.5px; }
-  #matched { font-size: 11px; color: var(--faint); margin-top: 2px; }
+  #identity { font-size: 11px; color: var(--faint); margin-top: 2px; }
 
   .rows { display: grid; gap: 0; }
   .row { display: grid; grid-template-columns: 62px 1fr; gap: 10px;
@@ -230,7 +230,7 @@
         <h2>Processor</h2>
         <div class="body">
           <div id="brand">Reading...</div>
-          <div id="matched"></div>
+          <div id="identity"></div>
           <div class="rows">
             <div class="row"><div class="k">Clock</div><div class="v" id="clock">-</div></div>
             <div class="row"><div class="k">Busy</div><div class="v" id="load">-</div></div>
@@ -425,6 +425,18 @@ function drawTemperature(s) {
   if (!en.disabled) en.textContent = s.temp_available ? 'Update helper' : 'Enable temperature';
 }
 
+// Cores, threads and base clock come from the operating system, so they are
+// there on every machine. Rated power is the one figure only the vendor
+// publishes, so it is the only part that can be missing.
+function identityText(s) {
+  const parts = [];
+  if (s.cores) parts.push(`${s.cores} cores`);
+  if (s.threads) parts.push(`${s.threads} threads`);
+  if (s.base_mhz) parts.push(`base ${s.base_mhz} MHz`);
+  if (s.tdp_watts) parts.push(`${s.tdp_watts} W rated`);
+  return parts.join(' · ');
+}
+
 function clockText(s) {
   if (!s.mhz) return 'unavailable';
   if (!s.base_mhz) return `${s.mhz} MHz`;
@@ -449,9 +461,7 @@ function render(s) {
   why.style.display = s.reason ? 'block' : 'none';
 
   $('brand').textContent = s.brand || 'Unknown processor';
-  $('matched').textContent = s.matched
-    ? `${s.matched} (${s.cores}C/${s.threads}T, base ${s.base_mhz} MHz, ${s.tdp_watts} W)`
-    : 'not in the specification database, so published limits are unavailable';
+  $('identity').textContent = identityText(s);
 
   // "3227 MHz sustained, base 2000" left the reader to work out which way is
   // good. The thing worth knowing is whether the processor is keeping the
@@ -460,9 +470,14 @@ function render(s) {
   $('load').innerHTML = `${s.utilization.toFixed(0)}% <span class="sub">of ${s.logical} processors</span>`;
   // The figure that explains a machine running below its promised speed, so
   // it is shown next to the clock rather than only used inside a finding.
+  // The rated figure is the vendor's and is genuinely unknown on a processor
+  // the database has never seen. Printing "of 0 W rated" there was worse than
+  // printing nothing.
   $('power').innerHTML = s.watts === null || s.watts === undefined
     ? '<span class="sub">needs the helper</span>'
-    : `${s.watts.toFixed(1)} W <span class="sub">of ${s.tdp_watts} W rated</span>`;
+    : s.tdp_watts
+      ? `${s.watts.toFixed(1)} W <span class="sub">of ${s.tdp_watts} W rated</span>`
+      : `${s.watts.toFixed(1)} W`;
   $('memory').innerHTML = s.total_mb > 0
     ? `${mb(s.available_mb)} free <span class="sub">of ${mb(s.total_mb)}</span>`
     : `${mb(s.available_mb)} free`;

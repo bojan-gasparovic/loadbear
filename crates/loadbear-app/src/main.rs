@@ -15,6 +15,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use loadbear_core::spec::reported_base_mhz;
 use loadbear_core::thermal_band;
 use loadbear_core::{
     classify, diagnose, evaluate, Assessment, ContainerReading, CpuReading, Reading, Resource,
@@ -28,6 +29,7 @@ use loadbear_sensors_windows::mapping::TemperatureReader;
 use loadbear_sensors_windows::processes::ProcessSampler;
 use loadbear_sensors_windows::service_control;
 use loadbear_sensors_windows::shared::{now_ms, SharedTemperature};
+use loadbear_sensors_windows::topology;
 use serde::Serialize;
 use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem};
@@ -124,11 +126,22 @@ struct Contributor {
 struct Status {
     tier: String,
     brand: Option<String>,
-    matched: Option<String>,
-    cores: u8,
-    threads: u8,
-    base_mhz: u32,
-    tdp_watts: u32,
+    /// Physical cores, from the operating system rather than the database.
+    ///
+    /// These were read out of the specification database, which meant they
+    /// were right on the three processors somebody had typed in and zero on
+    /// every other machine in the world. Windows knows them everywhere.
+    cores: u32,
+    /// Logical processors. Twice `cores` on anything with SMT.
+    threads: u32,
+    /// The base clock, from the vendor when it is known and from the machine
+    /// otherwise. Absent only when neither can supply one.
+    base_mhz: Option<u32>,
+    /// Rated power. Genuinely database-only, so absent on an unknown part.
+    ///
+    /// An `Option` rather than a zero, because the interface used to render
+    /// "of 0 W rated" on any processor that was not one of the three.
+    tdp_watts: Option<u32>,
     mhz: Option<u32>,
     logical: u32,
     utilization: f64,
@@ -179,11 +192,10 @@ impl Default for Status {
         Self {
             tier: "Easy".into(),
             brand: None,
-            matched: None,
             cores: 0,
             threads: 0,
-            base_mhz: 0,
-            tdp_watts: 0,
+            base_mhz: None,
+            tdp_watts: None,
             mhz: None,
             logical: 1,
             utilization: 0.0,
@@ -639,7 +651,12 @@ fn main() {
                     .as_ref()
                     .and_then(|k| db.resolve(k, logical.min(u8::MAX as u32) as u8));
                 let spec = resolved.as_ref().map(|m| m.spec.clone());
-                let matched_label = resolved.as_ref().map(|m| m.label());
+
+                // Cores and threads come from the machine, not the database, so
+                // they are right on a processor nobody has ever entered. The
+                // database is left holding only what Windows cannot report:
+                // the rated power band and TjMax.
+                let topology = topology::detect();
 
                 // Installed memory does not change while the application runs.
                 let total_mb = total_physical_mb().unwrap_or(0.0);
@@ -727,8 +744,16 @@ fn main() {
                         stall: to_stall(&judged, logical),
                         cpu: CpuReading {
                             all_core_mhz: judged.actual_mhz(),
-                            reported_base_mhz: None,
-            utilization_pct: Some(judged.processor_time_pct as f32),
+                            // The machine's own base clock, cross-checked
+                            // against the brand string. Without this the clock
+                            // verdict could only fire on a processor somebody
+                            // had entered into the database, which is what
+                            // `reported_base_mhz` exists to avoid.
+                            reported_base_mhz: reported_base_mhz(
+                                judged.processor_frequency_mhz.round() as u32,
+                                brand.as_deref(),
+                            ),
+                            utilization_pct: Some(judged.processor_time_pct as f32),
                             package_watts: published.as_ref().and_then(|s| s.watts()),
                             package_temp_c: published.as_ref().and_then(|s| s.package()),
                             tjmax_c: spec.as_ref().and_then(|s| s.tjmax_c),
@@ -792,11 +817,17 @@ fn main() {
                         *s = Status {
                             tier: format!("{tier:?}"),
                             brand: brand.clone(),
-                            matched: matched_label.clone(),
-                            cores: spec.as_ref().map(|s| s.cores).unwrap_or(0),
-                            threads: spec.as_ref().map(|s| s.threads).unwrap_or(0),
-                            base_mhz: spec.as_ref().map(|s| s.base_mhz).unwrap_or(0),
-                            tdp_watts: spec.as_ref().map(|s| s.tdp_watts).unwrap_or(0),
+                            cores: topology.map(|t| t.physical_cores).unwrap_or(0),
+                            threads: topology
+                                .map(|t| t.logical_processors)
+                                .unwrap_or(logical),
+                            // The vendor's published figure first, since it is
+                            // the promise being judged, then the machine's own.
+                            base_mhz: spec
+                                .as_ref()
+                                .map(|s| s.base_mhz)
+                                .or(reading.cpu.reported_base_mhz),
+                            tdp_watts: spec.as_ref().map(|s| s.tdp_watts),
                             mhz: reading.cpu.all_core_mhz,
                             logical,
                             utilization: sample.processor_time_pct,

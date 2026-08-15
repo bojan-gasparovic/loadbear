@@ -9,6 +9,7 @@
 
 use std::time::Duration;
 
+use loadbear_core::spec::reported_base_mhz;
 use loadbear_core::{
     classify, evaluate, CpuReading, Reading, SpecDb, ThrottleState, Tier, Verdict,
 };
@@ -17,6 +18,7 @@ use loadbear_sensors_windows::cpuid::{brand_string, current_cpu_key};
 use loadbear_sensors_windows::pawnio::{PawnIo, PawnIoError};
 use loadbear_sensors_windows::processes::ProcessSampler;
 use loadbear_sensors_windows::shared::now_ms;
+use loadbear_sensors_windows::topology;
 
 const SAMPLE_INTERVAL: Duration = Duration::from_millis(1000);
 
@@ -64,7 +66,10 @@ fn main() {
             stall: to_stall(&sample, logical),
             cpu: CpuReading {
                 all_core_mhz: sample.actual_mhz(),
-                reported_base_mhz: None,
+                reported_base_mhz: reported_base_mhz(
+                    sample.processor_frequency_mhz.round() as u32,
+                    brand_string().as_deref(),
+                ),
                 utilization_pct: Some(sample.processor_time_pct as f32),
                 package_watts: None,
                 package_temp_c: None,
@@ -138,22 +143,34 @@ fn render(
     if let Some(b) = brand_string() {
         println!("  {b}");
     }
-    match spec {
-        Some(s) => println!(
-            "  matched to {} ({}C/{}T, base {} MHz, {} W)",
-            s.name, s.cores, s.threads, s.base_mhz, s.tdp_watts
-        ),
-        None => {
-            println!("  not in the specification database, so published limits are unavailable")
+    // The vendor's published figure when the database has it, the machine's own
+    // otherwise.
+    let base_mhz = spec.map(|s| s.base_mhz).or(reading.cpu.reported_base_mhz);
+    // Cores, threads and the base clock come from the machine, so they print on
+    // any processor. Only the rated power needs the database, and its absence
+    // costs one clause rather than the whole line.
+    {
+        let mut parts: Vec<String> = Vec::new();
+        if let Some(t) = topology::detect() {
+            parts.push(format!("{} cores", t.physical_cores));
+            parts.push(format!("{} threads", t.logical_processors));
+        }
+        if let Some(base) = base_mhz {
+            parts.push(format!("base {base} MHz"));
+        }
+        if let Some(s) = spec {
+            parts.push(format!("{} W rated", s.tdp_watts));
+        }
+        if !parts.is_empty() {
+            println!("  {}", parts.join("  "));
         }
     }
     println!();
 
-    match (reading.cpu.all_core_mhz, spec) {
-        (Some(mhz), Some(s)) => println!(
-            "  Clock      {mhz} MHz sustained            base {} MHz guaranteed",
-            s.base_mhz
-        ),
+    match (reading.cpu.all_core_mhz, base_mhz) {
+        (Some(mhz), Some(base)) => {
+            println!("  Clock      {mhz} MHz sustained            base {base} MHz")
+        }
         (Some(mhz), None) => println!("  Clock      {mhz} MHz sustained"),
         (None, _) => println!("  Clock      unavailable"),
     }

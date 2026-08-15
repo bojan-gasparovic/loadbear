@@ -25,6 +25,7 @@ pub mod processes;
 pub mod service_control;
 pub mod shared;
 pub mod temperature;
+pub mod topology;
 
 pub use amd::{
     decode_ccd_temp, decode_die_temp, is_plausible_celsius, read_amd_temperature, PciGuard,
