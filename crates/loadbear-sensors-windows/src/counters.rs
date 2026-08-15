@@ -203,10 +203,15 @@ pub fn total_physical_mb() -> Option<f64> {
 
 /// How many samples the rolling window holds.
 ///
-/// At the application's sampling interval of 1.5 seconds this covers roughly
-/// twelve seconds, which is long enough for a majority of samples to disagree
-/// with a burst.
-pub const WINDOW_SAMPLES: usize = 8;
+/// At the application's sampling interval this covers two seconds. Short
+/// enough that the median follows real load within a couple of ticks, long
+/// enough that a single spike is outvoted three to one.
+///
+/// It was four times this when the interval was three times longer, which
+/// together put twelve seconds of smoothing in front of a thirty second
+/// escalation rule and made the interface take the better part of a minute to
+/// admit the machine was busy.
+pub const WINDOW_SAMPLES: usize = 4;
 
 /// A rolling window of samples, reducible by mean or by median.
 ///

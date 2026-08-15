@@ -103,17 +103,30 @@ pub fn classify(verdicts: &[Verdict], stall: &StallSignal) -> Assessment {
 
 /// How long a worse state must hold continuously before it is adopted.
 ///
-/// Strain is defined as sustained. A build that pins the machine for four
-/// seconds is the user doing their job, and colouring the tray icon red for it
-/// is a false alarm that teaches people to ignore the icon.
-pub const ESCALATE_MS: u64 = 30_000;
+/// # Why this is short, and why that is not a contradiction
+///
+/// This began at thirty seconds, on the reasoning that `Strained` means
+/// sustained. That conflated two jobs. Rejecting a spike is the sampling
+/// window's job and it does it on a two second median. Proving something has
+/// gone on long enough to be worth acting on is the *notification's* job, and
+/// the interruption contract holds its own separate five minute requirement.
+///
+/// The tier interrupts nobody. It colours a tray icon. Making it wait thirty
+/// seconds bought no protection the median was not already providing, and cost
+/// forty seconds of a visibly pinned machine reading Easy, which is a false
+/// negative that loses trust exactly as fast as a false alarm does.
+///
+/// At the sampling interval this is four consecutive observations. Anything
+/// shorter than two seconds cannot move it, because the observations on either
+/// side of a brief event still disagree.
+pub const ESCALATE_MS: u64 = 1_500;
 
 /// How long recovery must hold before a better state is adopted.
 ///
-/// Shorter than escalation but not instant, so that a momentary lull in the
-/// middle of a heavy build does not flash the icon back to green and start the
-/// thirty second escalation clock over.
-pub const SETTLE_MS: u64 = 20_000;
+/// Deliberately several times longer than escalation. Going quiet is not
+/// urgent, and a heavy build has lulls in it that should not flash the icon
+/// green and restart the escalation clock.
+pub const SETTLE_MS: u64 = 6_000;
 
 /// Applies the sustained requirement that [`Tier::Strained`] has always claimed.
 ///
@@ -136,6 +149,7 @@ pub struct TierTracker {
     escalate_ms: u64,
     settle_ms: u64,
     current: Assessment,
+    latest: Assessment,
     history: VecDeque<(u64, Assessment)>,
 }
 
@@ -154,12 +168,17 @@ impl TierTracker {
                 tier: Tier::Easy,
                 reason: TierReason::Clear,
             },
+            latest: Assessment {
+                tier: Tier::Easy,
+                reason: TierReason::Clear,
+            },
             history: VecDeque::new(),
         }
     }
 
     /// Record one window's judgement and return the tier to actually show.
     pub fn observe(&mut self, assessment: Assessment, now_ms: u64) -> Assessment {
+        self.latest = assessment;
         self.history.push_back((now_ms, assessment));
         let horizon = now_ms.saturating_sub(self.escalate_ms.max(self.settle_ms));
         while self.history.front().is_some_and(|(t, _)| *t < horizon) {
@@ -215,6 +234,22 @@ impl TierTracker {
 
     pub fn current(&self) -> Assessment {
         self.current
+    }
+
+    /// The most recent window's judgement, before the sustained rule.
+    ///
+    /// The adopted tier deliberately lags, and while it lags the rest of the
+    /// interface does not: the bars, the findings and the numbers all describe
+    /// the window just measured. Without this the interface could show a green
+    /// icon reading "nothing is waiting" beside a processor bar at one hundred
+    /// percent, which is not a lag, it is a contradiction.
+    pub fn latest(&self) -> Assessment {
+        self.latest
+    }
+
+    /// Whether the latest window disagrees with the tier being shown.
+    pub fn is_settling(&self) -> bool {
+        self.latest.tier != self.current.tier
     }
 }
 
@@ -299,7 +334,8 @@ mod tracker_tests {
     use super::*;
     use crate::types::StallSignal;
 
-    const TICK: u64 = 1500;
+    /// The application's real sampling interval.
+    const TICK: u64 = 500;
 
     fn easy() -> Assessment {
         Assessment {
@@ -335,17 +371,41 @@ mod tracker_tests {
 
     #[test]
     fn a_burst_never_escalates_anything() {
-        // The complaint, as a test. Something runs hard for a few seconds on
-        // an otherwise quiet machine and the tray icon goes red.
+        // Something runs hard for under a second and the tray icon must not
+        // go red for it. Two observations cannot span the escalation window,
+        // whatever they say.
         let mut t = TierTracker::default();
         let (_, mut now) = run(&mut t, easy(), 40, 0);
 
-        for _ in 0..3 {
+        for _ in 0..2 {
             now += TICK;
             assert_eq!(
                 t.observe(strained(), now).tier,
                 Tier::Easy,
-                "four seconds of load is a burst, not strain"
+                "a second of load is a spike, not strain"
+            );
+        }
+    }
+
+    #[test]
+    fn real_load_shows_up_within_a_few_seconds() {
+        // The other complaint, and the one that matters more in practice. A
+        // machine that is visibly pinned must not read Easy while the user
+        // watches it, because a false negative costs trust exactly as fast as
+        // a false alarm.
+        let mut t = TierTracker::default();
+        let (_, mut now) = run(&mut t, easy(), 40, 0);
+        let started = now;
+
+        loop {
+            now += TICK;
+            if t.observe(strained(), now).tier == Tier::Strained {
+                break;
+            }
+            assert!(
+                now - started <= 4_000,
+                "still Easy after {} ms of continuous load",
+                now - started
             );
         }
     }
@@ -388,7 +448,7 @@ mod tracker_tests {
         let (_, mut now) = run(&mut t, easy(), 40, 0);
 
         // Nearly enough strain to escalate.
-        for _ in 0..18 {
+        for _ in 0..2 {
             now += TICK;
             t.observe(strained(), now);
         }
@@ -397,7 +457,7 @@ mod tracker_tests {
         now += TICK;
         t.observe(easy(), now);
 
-        for _ in 0..5 {
+        for _ in 0..2 {
             now += TICK;
             assert_eq!(
                 t.observe(strained(), now).tier,
@@ -451,6 +511,25 @@ mod tracker_tests {
             "recovered after {}ms, sooner than the {SETTLE_MS}ms it should require",
             now - quiet_from
         );
+    }
+
+    #[test]
+    fn the_latest_window_is_visible_while_the_tier_lags() {
+        // The screenshot that produced this test showed a green icon reading
+        // "nothing is waiting" beside a processor bar at one hundred percent
+        // with seventy three threads queued. The tier lagging is by design;
+        // the interface claiming calm while it lags is not.
+        let mut t = TierTracker::default();
+        let (_, now) = run(&mut t, easy(), 40, 0);
+
+        let shown = t.observe(strained(), now + TICK);
+        assert_eq!(shown.tier, Tier::Easy, "the tier is still settling");
+        assert_eq!(
+            t.latest().tier,
+            Tier::Strained,
+            "and the interface can still say what the last window actually saw"
+        );
+        assert!(t.is_settling());
     }
 
     #[test]

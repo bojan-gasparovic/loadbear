@@ -34,7 +34,21 @@ use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{Manager, State};
 
-const SAMPLE_INTERVAL: Duration = Duration::from_millis(1500);
+/// How often the counters are read.
+///
+/// Fast enough that "sustained for three seconds" is six observations rather
+/// than two, which is what makes a short rule mean anything. Process
+/// enumeration does not run this often; see `PROCESS_EVERY`.
+const SAMPLE_INTERVAL: Duration = Duration::from_millis(500);
+
+/// Enumerate processes every Nth tick rather than every tick.
+///
+/// Counters are a cheap read. Opening a hundred and fifty processes is not,
+/// and attribution does not need half second resolution to name what is heavy.
+const PROCESS_EVERY: u32 = 4;
+
+/// Record a graph point every Nth tick, so five minutes still fits.
+const HISTORY_EVERY: u32 = 2;
 
 #[derive(Debug, Clone, Serialize)]
 struct VerdictView {
@@ -65,8 +79,8 @@ struct HistoryPoint {
     tier: u8,
 }
 
-/// Roughly five minutes at the sampling interval.
-const HISTORY_POINTS: usize = 200;
+/// Roughly five minutes, at one point per `HISTORY_EVERY` ticks.
+const HISTORY_POINTS: usize = 300;
 
 /// How many process groups the running list holds.
 ///
@@ -269,13 +283,37 @@ fn remediation_text(r: loadbear_core::Remediation) -> String {
 ///
 /// Always says something. A tier with no explanation behind it is an assertion,
 /// and an assertion the user cannot check is one they stop believing.
-fn reason_text(assessment: Assessment, settled: bool) -> String {
-    let seconds = loadbear_core::tier::ESCALATE_MS / 1000;
-    match assessment.reason {
-        TierReason::Clear if !settled => "Starting up.".to_string(),
+/// Why the tier is what it is, as a sentence.
+///
+/// Takes both the adopted tier and the window just measured. The adopted tier
+/// deliberately lags behind a change; nothing else in the interface does. So
+/// when the two disagree this says the state is moving rather than asserting a
+/// calm that the bars beside it plainly contradict.
+fn reason_text(adopted: Assessment, latest: Assessment, settled: bool) -> String {
+    if !settled && adopted.reason == TierReason::Clear && latest.reason == TierReason::Clear {
+        return "Starting up.".to_string();
+    }
+
+    // The tier has not caught up with the window just measured. Describe what
+    // is actually happening, not the tier that is on its way out.
+    if latest.tier != adopted.tier {
+        let moving = describe(latest.reason);
+        return if latest.tier > adopted.tier {
+            format!("{moving} Watching to see whether it holds.")
+        } else {
+            format!("{moving} Easing off.")
+        };
+    }
+
+    describe(adopted.reason)
+}
+
+/// One clause naming what is happening, with no claim about how long for.
+fn describe(reason: TierReason) -> String {
+    match reason {
         TierReason::Clear => "Nothing is waiting for a resource.".to_string(),
         TierReason::Verdict(kind) => format!(
-            "{} for over {seconds} seconds.",
+            "{}.",
             match kind {
                 VerdictKind::BelowBaseClock => "Running slower than the manufacturer promises",
                 VerdictKind::Throttling => "The processor is holding itself back",
@@ -284,11 +322,11 @@ fn reason_text(assessment: Assessment, settled: bool) -> String {
             }
         ),
         TierReason::Stall(resource) => format!(
-            "{} for over {seconds} seconds.",
+            "{}.",
             match resource {
-                Resource::Cpu => "Work queueing for a free processor",
-                Resource::Memory => "Work stopping to fetch memory from disk",
-                Resource::Io => "Work waiting on the disk",
+                Resource::Cpu => "Work is queueing for a free processor",
+                Resource::Memory => "Work is stopping to fetch memory from disk",
+                Resource::Io => "Work is waiting on the disk",
             }
         ),
     }
@@ -482,11 +520,14 @@ fn main() {
                 // in its documentation and never enforced.
                 let mut tracker = TierTracker::default();
                 let mut history: VecDeque<HistoryPoint> = VecDeque::new();
+                let mut tick: u32 = 0;
+                let mut processes = Vec::new();
 
                 loop {
                     let Ok(raw) = counters.sample(SAMPLE_INTERVAL) else {
                         continue;
                     };
+                    tick = tick.wrapping_add(1);
                     window.push(raw);
                     let sample = window.average().unwrap_or(raw);
                     let judged = window.median().unwrap_or(raw);
@@ -553,7 +594,12 @@ fn main() {
                                 reason: None,
                             },
                         },
-                        processes: process_sampler.sample(now),
+                        processes: {
+                            if tick % PROCESS_EVERY == 0 || processes.is_empty() {
+                                processes = process_sampler.sample(now);
+                            }
+                            processes.clone()
+                        },
                         containers: containers.lock().map(|c| c.clone()).unwrap_or_default(),
                     };
 
@@ -573,15 +619,17 @@ fn main() {
                     // real shape of the last few minutes, spikes included, next
                     // to a tier that deliberately ignores them.
                     let displayed = to_stall(&sample, logical);
-                    history.push_back(HistoryPoint {
-                        utilization: raw.processor_time_pct as f32,
-                        cpu: displayed.cpu,
-                        memory: displayed.memory,
-                        io: displayed.io,
-                        tier: tier as u8,
-                    });
-                    while history.len() > HISTORY_POINTS {
-                        history.pop_front();
+                    if tick % HISTORY_EVERY == 0 {
+                        history.push_back(HistoryPoint {
+                            utilization: raw.processor_time_pct as f32,
+                            cpu: displayed.cpu,
+                            memory: displayed.memory,
+                            io: displayed.io,
+                            tier: tier as u8,
+                        });
+                        while history.len() > HISTORY_POINTS {
+                            history.pop_front();
+                        }
                     }
 
                     if tier != last_tier {
@@ -624,8 +672,8 @@ fn main() {
                                     action: f.remediation.map(remediation_text),
                                 })
                                 .collect(),
-                            driver: driver_word(assessment).to_string(),
-                            reason: reason_text(assessment, window.is_settled()),
+                            driver: driver_word(tracker.latest()).to_string(),
+                            reason: reason_text(assessment, tracker.latest(), window.is_settled()),
                             history: history.iter().copied().collect(),
                             running: running_list(&reading, assessment),
                             temp_available,
