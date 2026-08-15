@@ -10,13 +10,15 @@
     "windows": [
       {
         "title": "LoadBear",
-        "width": 460,
-        "height": 720,
+        "width": 760,
+        "height": 560,
         "resizable": false,
         "visible": true,
         "decorations": true,
         "maximizable": false,
-        "fullscreen": false
+        "minimizable": true,
+        "fullscreen": false,
+        "alwaysOnTop": true
       }
     ],
     "security": {

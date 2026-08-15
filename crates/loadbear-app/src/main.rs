@@ -67,13 +67,23 @@ struct HistoryPoint {
 /// Roughly five minutes at the sampling interval.
 const HISTORY_POINTS: usize = 200;
 
-/// A container as the interface shows it.
+/// One row of the panel that explains the tier.
+///
+/// Containers are rows here rather than a section of their own. A standing list
+/// of containers is an inventory, and it also disappears the moment Docker
+/// stops, which in a fixed size window leaves a hole where a panel used to be.
+/// As rows they appear underneath Docker exactly when Docker is one of the
+/// things responsible, which is the only moment knowing the container helps.
 #[derive(Debug, Clone, Serialize)]
-struct ContainerView {
+struct Contributor {
     name: String,
-    memory_mb: f64,
-    limit_mb: Option<f64>,
     cpu: f32,
+    memory_mb: f64,
+    /// Rendered indented beneath the Docker row that produced it.
+    is_container: bool,
+    /// Present only for a container with a real limit, which changes the
+    /// remedy from stopping it to giving it less.
+    limit_mb: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -110,11 +120,7 @@ struct Status {
     /// Empty while the machine is fine. A list of what is running is Task
     /// Manager and helps nobody; the same list shown because a specific
     /// resource is under pressure is an explanation.
-    contributors: Vec<(String, f32, f64)>,
-    containers: Vec<ContainerView>,
-    /// Whether a container runtime answered at all, which is different from
-    /// answering that nothing is running.
-    docker_present: bool,
+    contributors: Vec<Contributor>,
     temp_available: bool,
     /// Whether the unavailable state is one the user can act on.
     temp_offerable: bool,
@@ -150,8 +156,6 @@ impl Default for Status {
             reason: "Watching. Nothing has held long enough to judge yet.".into(),
             history: vec![],
             contributors: vec![],
-            containers: vec![],
-            docker_present: false,
             temp_available: false,
             temp_offerable: false,
             temp_summary: String::new(),
@@ -278,7 +282,7 @@ fn reason_text(assessment: Assessment, settled: bool) -> String {
 /// clears the bar in `loadbear_core::attribution`, and this list appears
 /// whether or not it did, so the user can see what LoadBear was looking at when
 /// it declined to name anything.
-fn contributors(reading: &Reading, assessment: Assessment) -> Vec<(String, f32, f64)> {
+fn contributors(reading: &Reading, assessment: Assessment) -> Vec<Contributor> {
     let resource = match assessment.reason {
         TierReason::Clear => return Vec::new(),
         TierReason::Stall(r) => r,
@@ -293,17 +297,49 @@ fn contributors(reading: &Reading, assessment: Assessment) -> Vec<(String, f32, 
             groups.sort_by_key(|g| std::cmp::Reverse(g.working_set_bytes))
         }
     }
-    groups
+
+    let mut rows = Vec::new();
+    for g in groups.iter().take(4) {
+        let docker = is_docker_name(&g.name);
+        rows.push(Contributor {
+            name: if docker { "Docker".to_string() } else { g.label() },
+            cpu: g.cpu_percent,
+            memory_mb: g.working_set_bytes as f64 / 1_048_576.0,
+            is_container: false,
+            limit_mb: None,
+        });
+
+        // The one case where a second source says something the OS cannot.
+        // Windows sees one `vmmem` process and can never say which container
+        // is inside it, so this is the whole reason the Docker API is read.
+        if docker {
+            let mut containers: Vec<&ContainerReading> = reading.containers.iter().collect();
+            match resource {
+                Resource::Cpu => containers.sort_by(|a, b| b.cpu_percent.total_cmp(&a.cpu_percent)),
+                _ => containers.sort_by_key(|c| std::cmp::Reverse(c.memory_bytes)),
+            }
+            rows.extend(containers.iter().take(4).map(|c| Contributor {
+                name: c.name.clone(),
+                cpu: c.cpu_percent,
+                memory_mb: c.memory_bytes as f64 / 1_048_576.0,
+                is_container: true,
+                limit_mb: c.memory_limit_bytes.map(|l| l as f64 / 1_048_576.0),
+            }));
+        }
+    }
+    rows
+}
+
+/// Whether a process name means Docker rather than an ordinary application.
+///
+/// Kept in step with the list attribution uses, since a row that expands into
+/// containers and a cause that resolves to one have to agree about what counts
+/// as Docker.
+fn is_docker_name(name: &str) -> bool {
+    let n = name.to_lowercase();
+    ["vmmem", "docker desktop", "com.docker"]
         .iter()
-        .take(5)
-        .map(|g| {
-            (
-                g.label(),
-                g.cpu_percent,
-                g.working_set_bytes as f64 / 1_048_576.0,
-            )
-        })
-        .collect()
+        .any(|d| n.starts_with(d))
 }
 
 fn tray_icon(tier: Tier) -> Option<Image<'static>> {
@@ -534,19 +570,6 @@ fn main() {
                             reason: reason_text(assessment, window.is_settled()),
                             history: history.iter().copied().collect(),
                             contributors: contributors(&reading, assessment),
-                            containers: reading
-                                .containers
-                                .iter()
-                                .map(|c| ContainerView {
-                                    name: c.name.clone(),
-                                    memory_mb: c.memory_bytes as f64 / 1_048_576.0,
-                                    limit_mb: c
-                                        .memory_limit_bytes
-                                        .map(|l| l as f64 / 1_048_576.0),
-                                    cpu: c.cpu_percent,
-                                })
-                                .collect(),
-                            docker_present: !reading.containers.is_empty(),
                             temp_available,
                             temp_offerable,
                             temp_summary: match published.as_ref().and_then(|s| s.package()) {
