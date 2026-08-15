@@ -491,7 +491,11 @@ function render(s) {
 
   drawTemperature(s);
 
-  $('stamp').textContent = new Date().toLocaleTimeString();
+  // Explicit 24 hour, rather than whatever the locale prefers. A monitor is
+  // read at a glance and AM/PM is two characters of nothing.
+  $('stamp').textContent = new Date().toLocaleTimeString([], {
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+  });
 }
 
 $('enable').addEventListener('click', async () => {
