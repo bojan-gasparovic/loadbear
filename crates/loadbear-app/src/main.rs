@@ -484,13 +484,70 @@ fn is_docker_name(name: &str) -> bool {
         .any(|d| n.starts_with(d))
 }
 
+/// The tier's colour for an icon.
+///
+/// Deliberately not the window's palette. Those colours are chosen against a
+/// known light background; an icon sits on a taskbar whose colour LoadBear
+/// neither controls nor gets told about, so these are the same three hues
+/// lifted far enough to survive a dark one as well.
+const fn tier_rgb(tier: Tier) -> (u8, u8, u8) {
+    match tier {
+        Tier::Easy => (0x3f, 0x9e, 0x6d),
+        Tier::Braced => (0xd2, 0x92, 0x1c),
+        Tier::Strained => (0xdb, 0x53, 0x42),
+    }
+}
+
+/// The bear shape at the size wanted.
+///
+/// The tray is drawn at 16 or 32 pixels and the taskbar at 32 or more,
+/// depending on the display. Handing the larger shape to the window means
+/// Windows downsamples rather than stretching a 32 pixel image.
+fn bear_shape(tier: Tier, large: bool) -> &'static [u8] {
+    match (tier, large) {
+        (Tier::Easy, false) => include_bytes!("../icons/bear-easy-32.png"),
+        (Tier::Easy, true) => include_bytes!("../icons/bear-easy-128.png"),
+        (Tier::Braced, false) => include_bytes!("../icons/bear-braced-32.png"),
+        (Tier::Braced, true) => include_bytes!("../icons/bear-braced-128.png"),
+        (Tier::Strained, false) => include_bytes!("../icons/bear-strained-32.png"),
+        (Tier::Strained, true) => include_bytes!("../icons/bear-strained-128.png"),
+    }
+}
+
+/// Paint a bear shape in its tier's colour.
+///
+/// The artwork is a white silhouette on transparency, so multiplying by the
+/// colour yields that colour exactly while leaving the edge alpha alone.
+///
+/// Colour carries the tier here, not posture. The three shapes differ by a
+/// handful of pixels and at 32 across, let alone 16, that difference is not
+/// visible to anyone. Flat white told the user nothing at all.
+fn painted(tier: Tier, large: bool) -> Option<Image<'static>> {
+    let src = Image::from_bytes(bear_shape(tier, large)).ok()?;
+    let (r, g, b) = tier_rgb(tier);
+
+    let mut rgba = src.rgba().to_vec();
+    for px in rgba.chunks_exact_mut(4) {
+        px[0] = (px[0] as u16 * r as u16 / 255) as u8;
+        px[1] = (px[1] as u16 * g as u16 / 255) as u8;
+        px[2] = (px[2] as u16 * b as u16 / 255) as u8;
+    }
+
+    Some(Image::new_owned(rgba, src.width(), src.height()))
+}
+
 fn tray_icon(tier: Tier) -> Option<Image<'static>> {
-    let bytes: &[u8] = match tier {
-        Tier::Easy => include_bytes!("../icons/bear-easy-32.png"),
-        Tier::Braced => include_bytes!("../icons/bear-braced-32.png"),
-        Tier::Strained => include_bytes!("../icons/bear-strained-32.png"),
-    };
-    Image::from_bytes(bytes).ok()
+    painted(tier, false)
+}
+
+/// The taskbar button's icon.
+///
+/// Separate from the tray because Windows keeps a per-window icon, and leaving
+/// it unset meant the taskbar showed the bundled application icon for as long
+/// as LoadBear ran. That icon is a byte for byte copy of the easy bear, so the
+/// taskbar quietly reported an idle machine while the window beside it was red.
+fn window_icon(tier: Tier) -> Option<Image<'static>> {
+    painted(tier, true)
 }
 
 fn main() {
@@ -524,6 +581,14 @@ fn main() {
                     _ => {}
                 })
                 .build(app)?;
+
+            // Paint the taskbar before the first tier change, so it never shows
+            // the bundled application icon even briefly.
+            if let (Some(w), Some(icon)) =
+                (app.get_webview_window("main"), window_icon(Tier::Easy))
+            {
+                let _ = w.set_icon(icon);
+            }
 
             let shared = shared.clone();
             let handle = app.handle().clone();
@@ -701,6 +766,11 @@ fn main() {
                         if let Some(icon) = tray_icon(tier) {
                             let _ = tray.set_icon(Some(icon));
                         }
+                        if let (Some(w), Some(icon)) =
+                            (handle.get_webview_window("main"), window_icon(tier))
+                        {
+                            let _ = w.set_icon(icon);
+                        }
                         let _ = tray.set_tooltip(Some(format!("LoadBear: {tier:?}")));
                         last_tier = tier;
                     }
@@ -763,8 +833,6 @@ fn main() {
                             temp_reason: temp_reason.clone(),
                         };
                     }
-
-                    let _ = &handle;
                 }
             });
 
@@ -772,4 +840,71 @@ fn main() {
         })
         .run(tauri::generate_context!())
         .expect("LoadBear failed to start");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const TIERS: [Tier; 3] = [Tier::Easy, Tier::Braced, Tier::Strained];
+
+    /// The colour of the first fully opaque pixel, which is the bear itself.
+    fn body_colour(image: &Image<'_>) -> (u8, u8, u8) {
+        let rgba = image.rgba();
+        let px = rgba
+            .chunks_exact(4)
+            .find(|p| p[3] == 255)
+            .expect("the silhouette must have opaque pixels");
+        (px[0], px[1], px[2])
+    }
+
+    #[test]
+    fn every_icon_is_painted_in_its_own_tier_colour() {
+        // The regression: all three shipped as flat white on transparency, so
+        // the icon said nothing about the tier and barely rendered at all.
+        for large in [false, true] {
+            for tier in TIERS {
+                let image = painted(tier, large).expect("the icon must decode");
+                assert_eq!(
+                    body_colour(&image),
+                    tier_rgb(tier),
+                    "{tier:?} at large={large} is not wearing its own colour"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_three_tiers_are_told_apart_by_colour_rather_than_shape() {
+        // The shapes differ by a handful of pixels, which is invisible at the
+        // sizes a tray and a taskbar actually draw. Colour has to do the work,
+        // so no two tiers may share one.
+        let colours: Vec<_> = TIERS.iter().map(|t| tier_rgb(*t)).collect();
+        for (i, a) in colours.iter().enumerate() {
+            for b in colours.iter().skip(i + 1) {
+                assert_ne!(a, b, "two tiers share a colour");
+            }
+        }
+    }
+
+    #[test]
+    fn painting_leaves_the_transparent_background_alone() {
+        // Multiplying must not turn transparency into a black square, which is
+        // what a taskbar would show if alpha were touched.
+        let image = painted(Tier::Strained, false).expect("the icon must decode");
+        let clear = image.rgba().chunks_exact(4).filter(|p| p[3] == 0).count();
+        assert!(clear > 0, "the silhouette must keep a transparent surround");
+    }
+
+    #[test]
+    fn the_taskbar_gets_a_larger_shape_than_the_tray() {
+        // Windows draws the taskbar button well above 32 pixels on a scaled
+        // display, and stretching the tray image there looks like a mistake.
+        let tray = tray_icon(Tier::Easy).expect("the icon must decode");
+        let window = window_icon(Tier::Easy).expect("the icon must decode");
+        assert!(
+            window.width() > tray.width(),
+            "the window icon must not be the tray icon"
+        );
+    }
 }
