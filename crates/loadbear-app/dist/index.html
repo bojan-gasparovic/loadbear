@@ -127,7 +127,7 @@
   .graph .cap .k-wait { color: var(--strained); }
 
   #verdicts { overflow: hidden; }
-  #why { font-size: 11.5px; color: var(--dim); line-height: 1.4; }
+  #why { font-size: 11.5px; color: var(--dim); line-height: 1.4; margin-bottom: 2px; }
   .verdict { border-left: 2px solid var(--strained); background: var(--well);
              border-radius: 0 5px 5px 0; padding: 6px 9px; margin-top: 6px; }
   .verdict.degraded { border-left-color: var(--braced); }
@@ -417,7 +417,11 @@ function render(s) {
   const bear = $('bear');
   bear.style.webkitMaskImage = `url('bear-${tier}-128.png')`;
   bear.style.backgroundColor = TIER_COLOR[TIER_INDEX[tier] ?? 0];
-  $('why').textContent = s.reason;
+  // Empty when a finding card below already says it, so the panel does not
+  // state the same thing twice.
+  const why = $('why');
+  why.textContent = s.reason;
+  why.style.display = s.reason ? 'block' : 'none';
 
   $('brand').textContent = s.brand || 'Unknown processor';
   $('matched').textContent = s.matched

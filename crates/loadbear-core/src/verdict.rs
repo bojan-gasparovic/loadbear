@@ -175,7 +175,7 @@ pub fn evaluate(reading: &Reading, spec: Option<&CpuSpec>) -> Vec<Verdict> {
                 kind: VerdictKind::BelowBaseClock,
                 severity: Severity::OutOfSpec,
                 detail: format!(
-                    "All cores are sustaining {mhz} MHz against a guaranteed base of {} MHz.",
+                    "Every processor is busy, and the clock is {mhz} MHz against a guaranteed {} MHz. Busy and slow at the same time means something is holding the clock down rather than the machine running out of work.",
                     spec.base_mhz
                 ),
                 basis: format!(

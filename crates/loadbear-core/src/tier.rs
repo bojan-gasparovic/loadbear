@@ -180,7 +180,12 @@ impl TierTracker {
     pub fn observe(&mut self, assessment: Assessment, now_ms: u64) -> Assessment {
         self.latest = assessment;
         self.history.push_back((now_ms, assessment));
-        let horizon = now_ms.saturating_sub(self.escalate_ms.max(self.settle_ms));
+        // Keep twice the longest window. Pruning to exactly the window the
+        // rules then ask about leaves the oldest sample sitting on the
+        // boundary, where it survives only if the clock ticks perfectly
+        // evenly. The application's clock does not, so de-escalation decided
+        // it never had enough history and the tier stuck.
+        let horizon = now_ms.saturating_sub(self.escalate_ms.max(self.settle_ms).saturating_mul(2));
         while self.history.front().is_some_and(|(t, _)| *t < horizon) {
             self.history.pop_front();
         }
@@ -530,6 +535,45 @@ mod tracker_tests {
             "and the interface can still say what the last window actually saw"
         );
         assert!(t.is_settling());
+    }
+
+    #[test]
+    fn recovery_survives_a_clock_that_does_not_tick_evenly() {
+        // Every other test here ticks on an exact grid, which is not what the
+        // application does: the loop sleeps, does work of varying length, and
+        // reads a clock with its own granularity, so timestamps drift.
+        //
+        // That difference hid a real defect. History was pruned to the same
+        // span the settle rule then asked it to cover, so on an exact grid the
+        // oldest sample landed precisely on the boundary and passed, while any
+        // jitter at all left it just inside and the rule reported "not enough
+        // history" forever. The tier went red quickly and never came back.
+        let mut t = TierTracker::default();
+        let mut now = 0u64;
+        let jitter = [503u64, 497, 511, 489, 500, 517, 483, 508];
+        let mut j = 0usize;
+        let mut step = |t: &mut TierTracker, a: Assessment, now: &mut u64| {
+            *now += jitter[j % jitter.len()];
+            j += 1;
+            t.observe(a, *now).tier
+        };
+
+        for _ in 0..60 {
+            step(&mut t, strained(), &mut now);
+        }
+        assert_eq!(t.current().tier, Tier::Strained);
+
+        let quiet_from = now;
+        loop {
+            if step(&mut t, easy(), &mut now) == Tier::Easy {
+                break;
+            }
+            assert!(
+                now - quiet_from < SETTLE_MS * 4,
+                "still Strained after {} ms of quiet on an uneven clock",
+                now - quiet_from
+            );
+        }
     }
 
     #[test]

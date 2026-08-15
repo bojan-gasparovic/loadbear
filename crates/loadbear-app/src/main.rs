@@ -294,6 +294,13 @@ fn reason_text(adopted: Assessment, latest: Assessment, settled: bool) -> String
         return "Starting up.".to_string();
     }
 
+    // A verdict already has a card of its own below, with more detail than
+    // this line could carry. Repeating its title above it says the same thing
+    // twice in one panel and reads as though two separate things are wrong.
+    if latest.tier == adopted.tier && matches!(adopted.reason, TierReason::Verdict(_)) {
+        return String::new();
+    }
+
     // The tier has not caught up with the window just measured. Describe what
     // is actually happening, not the tier that is on its way out.
     if latest.tier != adopted.tier {
