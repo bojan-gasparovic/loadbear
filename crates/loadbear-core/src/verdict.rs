@@ -43,6 +43,66 @@ pub struct Verdict {
 /// being available, which is information, not a fault.
 const THERMAL_HEADROOM_LOW_C: f32 = 5.0;
 
+/// How much room is left below the vendor's own limit.
+///
+/// # Why this is not a normal range
+///
+/// LoadBear does not invent one, and this is not one. Chassis, ambient and
+/// cooling account for something like twenty degrees of variance that has
+/// nothing to do with the processor, which is why no vendor publishes a normal
+/// range and why a fixed "70 is warm, 90 is hot" scale is wrong on some
+/// machines and useless on others.
+///
+/// What every vendor does publish is TjMax, the junction temperature the part
+/// is specified to reach. Distance below that is a real quantity with a real
+/// authority behind it, and it rescales itself for a part specified to 105 and
+/// a part specified to 90 without anybody choosing a number.
+///
+/// [`ThermalBand::AtLimit`] begins exactly where [`VerdictKind::ThermalHeadroomLow`]
+/// fires, so a tile turning red and a finding appearing are the same event
+/// rather than two thresholds that can disagree.
+///
+/// Running at the limit is by design on modern parts. `AtLimit` means headroom
+/// has been used up, which is information, not a fault.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ThermalBand {
+    /// Plenty of room below the specified limit.
+    Normal,
+    /// Warming, still comfortably inside the specification.
+    Warm,
+    /// Approaching the limit.
+    Hot,
+    /// Headroom is gone. The same point the thermal verdict fires at.
+    AtLimit,
+}
+
+/// Headroom above which nothing is remarkable.
+const HEADROOM_NORMAL_C: f32 = 25.0;
+/// Headroom above which the part is merely warm.
+const HEADROOM_WARM_C: f32 = 15.0;
+
+/// Which band a reading falls in, or `None` when the part publishes no limit.
+///
+/// `None` is a real answer and the interface shows it as an uncoloured tile.
+/// AMD parts frequently report TjMax as zero from every source available, and
+/// colouring against a guess would be exactly the invented range this avoids.
+pub fn thermal_band(temp_c: f32, tjmax_c: Option<f32>) -> Option<ThermalBand> {
+    let tjmax = tjmax_c?;
+    if tjmax <= 0.0 {
+        return None;
+    }
+    let headroom = tjmax - temp_c;
+    Some(if headroom > HEADROOM_NORMAL_C {
+        ThermalBand::Normal
+    } else if headroom > HEADROOM_WARM_C {
+        ThermalBand::Warm
+    } else if headroom > THERMAL_HEADROOM_LOW_C {
+        ThermalBand::Hot
+    } else {
+        ThermalBand::AtLimit
+    })
+}
+
 /// Utilization below which the base clock guarantee cannot be tested.
 ///
 /// This is not a threshold on a fault, and it can only ever make LoadBear
@@ -150,7 +210,7 @@ mod tests {
     use crate::spec::{CpuSpec, Vendor};
     use crate::types::{CpuReading, Reading, StallSignal, ThrottleReason, ThrottleState};
 
-    fn spec() -> CpuSpec {
+    pub(super) fn spec() -> CpuSpec {
         CpuSpec {
             vendor: Vendor::Amd,
             family: 23,
@@ -168,7 +228,7 @@ mod tests {
         }
     }
 
-    fn reading(cpu: CpuReading) -> Reading {
+    pub(super) fn reading(cpu: CpuReading) -> Reading {
         Reading {
             timestamp_ms: 0,
             stall: StallSignal {
@@ -186,7 +246,7 @@ mod tests {
     ///
     /// Utilization is high because that is the only state in which the base
     /// clock guarantee can be tested at all.
-    fn healthy_cpu() -> CpuReading {
+    pub(super) fn healthy_cpu() -> CpuReading {
         CpuReading {
             all_core_mhz: Some(2400),
             utilization_pct: Some(95.0),
@@ -383,5 +443,74 @@ mod tests {
                 v.kind
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod thermal_band_tests {
+    use super::tests::{healthy_cpu, reading, spec};
+    use super::*;
+
+    const TJMAX: Option<f32> = Some(105.0);
+
+    #[test]
+    fn a_cool_processor_is_normal() {
+        assert_eq!(thermal_band(45.0, TJMAX), Some(ThermalBand::Normal));
+        assert_eq!(thermal_band(79.0, TJMAX), Some(ThermalBand::Normal));
+    }
+
+    #[test]
+    fn the_bands_run_in_order_as_it_heats_up() {
+        let at = |t| thermal_band(t, TJMAX).unwrap();
+        assert_eq!(at(70.0), ThermalBand::Normal);
+        assert_eq!(at(85.0), ThermalBand::Warm);
+        assert_eq!(at(95.0), ThermalBand::Hot);
+        assert_eq!(at(102.0), ThermalBand::AtLimit);
+    }
+
+    #[test]
+    fn red_begins_exactly_where_the_thermal_verdict_fires() {
+        // The two must not be able to disagree. A tile turning red while
+        // nothing appears in the findings, or the reverse, would be the
+        // interface contradicting itself about the same reading.
+        let tjmax = 105.0;
+        let boundary = tjmax - THERMAL_HEADROOM_LOW_C;
+
+        assert_eq!(
+            thermal_band(boundary, Some(tjmax)),
+            Some(ThermalBand::AtLimit)
+        );
+        assert_eq!(
+            thermal_band(boundary - 0.1, Some(tjmax)),
+            Some(ThermalBand::Hot)
+        );
+
+        let mut cpu = healthy_cpu();
+        cpu.package_temp_c = Some(boundary);
+        cpu.tjmax_c = Some(tjmax);
+        assert!(
+            evaluate(&reading(cpu), Some(&spec()))
+                .iter()
+                .any(|v| v.kind == VerdictKind::ThermalHeadroomLow),
+            "the verdict must fire at the same reading the tile turns red at"
+        );
+    }
+
+    #[test]
+    fn the_bands_rescale_to_the_part_rather_than_to_a_fixed_scale() {
+        // 85 degrees is comfortable on a part specified to 105 and nearly out
+        // of room on one specified to 95. A fixed scale gets one of them wrong.
+        assert_eq!(thermal_band(85.0, Some(105.0)), Some(ThermalBand::Warm));
+        assert_eq!(thermal_band(85.0, Some(95.0)), Some(ThermalBand::Hot));
+    }
+
+    #[test]
+    fn without_a_published_limit_nothing_is_coloured() {
+        assert_eq!(thermal_band(85.0, None), None);
+        assert_eq!(
+            thermal_band(85.0, Some(0.0)),
+            None,
+            "AMD parts report TjMax as zero from every source, and zero is not a limit"
+        );
     }
 }

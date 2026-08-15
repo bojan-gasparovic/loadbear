@@ -24,4 +24,4 @@ pub use types::{
     ContainerReading, CpuReading, ProcessReading, Reading, Resource, StallSignal, ThrottleReason,
     ThrottleState,
 };
-pub use verdict::{evaluate, Severity, Verdict, VerdictKind};
+pub use verdict::{evaluate, thermal_band, Severity, ThermalBand, Verdict, VerdictKind};

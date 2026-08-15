@@ -15,6 +15,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use loadbear_core::thermal_band;
 use loadbear_core::{
     classify, diagnose, evaluate, Assessment, ContainerReading, CpuReading, Reading, Resource,
     SpecDb, ThrottleState, Tier, TierReason, TierTracker, VerdictKind,
@@ -66,6 +67,20 @@ struct HistoryPoint {
 
 /// Roughly five minutes at the sampling interval.
 const HISTORY_POINTS: usize = 200;
+
+/// One temperature tile.
+///
+/// The band is decided here rather than in the interface, because which colour
+/// a reading deserves is a judgement about hardware and every judgement in
+/// LoadBear traces to a published figure. `band` is absent when the part
+/// publishes no TjMax, and the tile is then drawn uncoloured rather than
+/// against an invented scale.
+#[derive(Debug, Clone, Serialize)]
+struct ZoneView {
+    label: String,
+    celsius: f32,
+    band: Option<String>,
+}
 
 /// One row of the panel that explains the tier.
 ///
@@ -126,7 +141,7 @@ struct Status {
     temp_offerable: bool,
     /// Labelled per-zone readings, so the interface can lay them out rather
     /// than parse them back out of a sentence.
-    temp_zones: Vec<(String, f32)>,
+    temp_zones: Vec<ZoneView>,
     temp_reason: String,
 }
 
@@ -577,7 +592,15 @@ fn main() {
                             temp_zones: published
                                 .as_ref()
                                 .map(|s| s.zone_list())
-                                .unwrap_or_default(),
+                                .unwrap_or_default()
+                                .into_iter()
+                                .map(|(label, celsius)| ZoneView {
+                                    label,
+                                    celsius,
+                                    band: thermal_band(celsius, reading.cpu.tjmax_c)
+                                        .map(|b| format!("{b:?}").to_lowercase()),
+                                })
+                                .collect(),
                             temp_reason: temp_reason.clone(),
                         };
                     }

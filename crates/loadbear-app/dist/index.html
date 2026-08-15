@@ -45,7 +45,10 @@
     display: grid; grid-template-rows: auto 1fr auto; gap: 12px; overflow: hidden;
   }
 
-  header { display: grid; grid-template-columns: 46px auto 1fr auto; align-items: center; gap: 13px; }
+  /* Two halves matching `.cols` below, so the temperature row is exactly as
+     wide as the graph underneath it and the tiles line up with its edges. */
+  header { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; align-items: center; }
+  .hleft { display: grid; grid-template-columns: 46px auto 1fr; align-items: center; gap: 13px; }
   /* The artwork is a flat white silhouette with only its alpha carrying
      shape, so it is invisible on a light background as an image. Painted
      through a mask it takes the tier colour, which loses nothing and puts the
@@ -130,13 +133,26 @@
   /* Temperature lives in the header rather than in a panel of its own. Per
      core tiles and nothing else, in a single row: the package figure was the
      average of what these already say, so it cost a line to repeat them. */
-  #temp { justify-self: end; text-align: right; max-width: 290px; }
-  #zones { display: none; grid-template-columns: repeat(8, 31px); gap: 3px; }
-  #zones .z { background: var(--well); border-radius: 4px; padding: 2px 3px; text-align: center; }
-  #zones .zl { font-size: 8px; color: var(--faint); letter-spacing: .03em; line-height: 1.2; }
-  #zones .zv { font-size: 11px; font-variant-numeric: tabular-nums; line-height: 1.25; }
-  #zones .z.hot .zv { color: var(--braced); }
-  #zones .z.max .zv { color: var(--strained); }
+  #temp { text-align: right; }
+  /* Eight equal fractions of the half, so the row is the width of the graph
+     below it whatever the window is. */
+  #zones { display: none; grid-template-columns: repeat(8, 1fr); gap: 4px; }
+  #zones .z { background: var(--well); border: 1px solid transparent;
+              border-radius: 5px; padding: 3px 2px; text-align: center; }
+  #zones .zl { font-size: 8.5px; color: var(--faint); letter-spacing: .04em; line-height: 1.2; }
+  #zones .zv { font-size: 14px; font-weight: 560; font-variant-numeric: tabular-nums; line-height: 1.2; }
+
+  /* Coloured by headroom below the vendor's published TjMax, never by an
+     absolute scale. A band is chosen in `loadbear_core::thermal_band`, and a
+     part that publishes no limit gets no colour rather than a guess. */
+  #zones .z.normal  { background: #e4f1ea; border-color: #c6e2d3; }
+  #zones .z.normal  .zv { color: var(--easy); }
+  #zones .z.warm    { background: #fbf2d8; border-color: #ecdca6; }
+  #zones .z.warm    .zv { color: #8a6c08; }
+  #zones .z.hot     { background: #fdeadb; border-color: #f3cfb2; }
+  #zones .z.hot     .zv { color: #b3560f; }
+  #zones .z.atlimit { background: #fbe3e0; border-color: #efc4bf; }
+  #zones .z.atlimit .zv { color: var(--strained); }
   #temp-note { font-size: 10.5px; color: var(--faint); line-height: 1.4; }
   #enable { margin-top: 6px; display: none; font: inherit; font-size: 10.5px; font-weight: 560;
             color: #ffffff; background: var(--text); border: 0; border-radius: 5px;
@@ -152,12 +168,14 @@
 <body>
 <div id="app">
   <header>
-    <div id="bear" role="img" aria-label="LoadBear"></div>
-    <div>
-      <div class="title">LoadBear</div>
-      <div id="tier" class="easy">Easy</div>
+    <div class="hleft">
+      <div id="bear" role="img" aria-label="LoadBear"></div>
+      <div>
+        <div class="title">LoadBear</div>
+        <div id="tier" class="easy">Easy</div>
+      </div>
+      <div id="why">Starting up.</div>
     </div>
-    <div id="why">Starting up.</div>
     <div id="temp">
       <div id="zones"></div>
       <div id="temp-note"></div>
@@ -288,15 +306,20 @@ const CORE_TILES = 8;
 // one. Colour comes from headroom below the vendor's own TjMax, and when TjMax
 // is unknown the tiles stay uncoloured rather than guessing.
 function drawTemperature(s) {
-  const zones = (s.temp_zones || []).filter(([label]) => /^core/i.test(label));
+  const zones = (s.temp_zones || []).filter(z => /^core/i.test(z.label));
   const z = $('zones'), note = $('temp-note'), en = $('enable');
 
   if (zones.length) {
     z.style.display = 'grid';
     note.textContent = '';
-    z.innerHTML = zones.slice(0, CORE_TILES).map(([label, val]) => {
-      const n = label.replace(/^core\s*/i, '');
-      return `<div class="z"><div class="zl">${esc(n)}</div><div class="zv">${val.toFixed(0)}</div></div>`;
+    z.innerHTML = zones.slice(0, CORE_TILES).map(zone => {
+      const n = zone.label.replace(/^core\s*/i, '');
+      // The band is decided in the engine against the published TjMax. An
+      // absent band means the part publishes no limit, and the tile stays
+      // uncoloured rather than being coloured against an invented range.
+      return `<div class="z ${zone.band || ''}">`
+        + `<div class="zl">${esc(n)}</div>`
+        + `<div class="zv">${zone.celsius.toFixed(0)}</div></div>`;
     }).join('');
   } else {
     z.style.display = 'none';
