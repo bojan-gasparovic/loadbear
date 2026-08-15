@@ -348,8 +348,24 @@ pub mod scale {
     pub const PAGES_INPUT_SATURATED: f64 = 20_000.0;
     /// Seconds per disk transfer at which I/O stall is treated as saturated.
     ///
-    /// Measured range during ordinary work on this machine was 0.0002 to
-    /// 0.0013, comfortably clear of this, so it is left where it was.
+    /// **This one cannot be a constant at all, and the measurement says so.**
+    /// With four threads reading files continuously on 2026-08-15, latency on
+    /// this machine peaked at 3.4 ms and normally sat between 0.1 and 0.9,
+    /// giving a normalized stall that never left single digits under a load
+    /// deliberately designed to saturate the disk. The figure below is a
+    /// spinning disk number and this machine has NVMe.
+    ///
+    /// There is no value that works for every machine. Twenty milliseconds is
+    /// ordinary on a mechanical disk, five on a SATA SSD, half of one on NVMe,
+    /// so a fixed threshold is either blind on fast storage or screaming on
+    /// slow storage. Unlike clock and temperature there is no vendor guarantee
+    /// and no hardware bit to appeal to.
+    ///
+    /// DESIGN names the remaining source: the machine's own history. This wants
+    /// a baseline learned from the machine when it is idle, which needs the
+    /// sample store. Until that exists the interface shows the measured
+    /// latency itself, which is meaningful, and treats the normalized bar as
+    /// the weak signal it is. See LB-20.
     pub const DISK_LATENCY_SATURATED: f64 = 0.050;
 }
 

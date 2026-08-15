@@ -84,13 +84,23 @@
   .v { font-variant-numeric: tabular-nums; font-size: 12px; }
   .v .sub { color: var(--dim); font-size: 10.5px; }
 
-  .bars { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; }
-  .bar .lab { font-size: 9.5px; color: var(--faint); text-transform: uppercase;
-              letter-spacing: .07em; margin-bottom: 4px; display: flex; justify-content: space-between; }
-  .bar .track { height: 4px; background: var(--well); border-radius: 2px; overflow: hidden; }
-  .bar .fill { height: 100%; width: 0%; background: var(--dim); transition: width .35s ease, background .35s ease; }
-  .bar.hot .fill { background: var(--braced); }
-  .bar.max .fill { background: var(--strained); }
+  /* Each stall carries the quantity it was actually measured from, because the
+     percentage is a normalisation against a constant and the raw figure is the
+     measurement. Where the constant is a poor fit for the hardware, and for
+     disk latency it always is, the raw figure is the part worth reading. */
+  .stalls { display: grid; gap: 7px; }
+  .st { display: grid; grid-template-columns: 58px 1fr 30px; gap: 8px; align-items: center; }
+  .st .sl { font-size: 10.5px; color: var(--faint); }
+  .st .track { height: 5px; background: var(--well); border-radius: 3px; overflow: hidden; }
+  .st .fill { height: 100%; width: 0%; background: var(--hair);
+              transition: width .35s ease, background .35s ease; }
+  .st.hot .fill { background: var(--braced); }
+  .st.max .fill { background: var(--strained); }
+  .st .sv { font-size: 10.5px; text-align: right; color: var(--dim);
+            font-variant-numeric: tabular-nums; }
+  .st .sr { grid-column: 2 / 4; font-size: 10px; color: var(--hair);
+            font-variant-numeric: tabular-nums; margin-top: -4px; }
+  .note { font-size: 10px; color: var(--hair); line-height: 1.4; }
 
   h2 { font-size: 9.5px; letter-spacing: .13em; text-transform: uppercase; color: var(--faint);
        margin: 0 0 6px; font-weight: 600; }
@@ -193,17 +203,33 @@
 
       <div class="rows">
         <div class="row"><div class="k">Clock</div><div class="v" id="clock">-</div></div>
-        <div class="row"><div class="k">Load</div><div class="v" id="load">-</div></div>
-        <div class="row"><div class="k">Queue</div><div class="v" id="queue">-</div></div>
-        <div class="row"><div class="k">Memory</div><div class="v" id="memory">-</div></div>
-        <div class="row"><div class="k">Disk</div><div class="v" id="disk">-</div></div>
+        <div class="row"><div class="k">Busy</div><div class="v" id="load">-</div></div>
+        <div class="row"><div class="k">Free</div><div class="v" id="memory">-</div></div>
       </div>
 
-      <div class="bars">
-        <div class="bar" id="bar-cpu"><div class="lab"><span>cpu</span><span class="pct">0%</span></div><div class="track"><div class="fill"></div></div></div>
-        <div class="bar" id="bar-mem"><div class="lab"><span>memory</span><span class="pct">0%</span></div><div class="track"><div class="fill"></div></div></div>
-        <div class="bar" id="bar-io"><div class="lab"><span>io</span><span class="pct">0%</span></div><div class="track"><div class="fill"></div></div></div>
+      <h2>Waiting on <span class="hint">not the same as busy</span></h2>
+      <div class="stalls">
+        <div class="st" id="st-cpu">
+          <div class="sl">processor</div>
+          <div class="track"><div class="fill"></div></div>
+          <div class="sv">0%</div>
+          <div class="sr"></div>
+        </div>
+        <div class="st" id="st-mem">
+          <div class="sl">memory</div>
+          <div class="track"><div class="fill"></div></div>
+          <div class="sv">0%</div>
+          <div class="sr"></div>
+        </div>
+        <div class="st" id="st-disk">
+          <div class="sl">disk</div>
+          <div class="track"><div class="fill"></div></div>
+          <div class="sv">0%</div>
+          <div class="sr"></div>
+        </div>
       </div>
+
+      <div class="note" id="stall-note"></div>
 
     </div>
 
@@ -244,10 +270,17 @@ const esc = s => String(s).replace(/[&<>"']/g, c =>
 
 const mb = v => v >= 1024 ? (v / 1024).toFixed(1) + ' GB' : Math.round(v) + ' MB';
 
-function bar(el, v) {
+// One stall row: the normalised bar, and the quantity it was measured from.
+//
+// The percentage is a normalisation against a saturation constant, and two of
+// the three constants are admittedly weak. The raw figure beside it is the
+// actual measurement, so a bar sitting near zero can be read as "the disk is
+// answering in half a millisecond" rather than as a broken indicator.
+function stall(el, v, raw) {
   const pct = Math.round(v * 100);
-  el.querySelector('.fill').style.width = pct + '%';
-  el.querySelector('.pct').textContent = pct + '%';
+  el.querySelector('.fill').style.width = Math.max(pct, v > 0 ? 1 : 0) + '%';
+  el.querySelector('.sv').textContent = pct + '%';
+  el.querySelector('.sr').textContent = raw;
   el.classList.toggle('hot', v >= 0.40 && v < 0.80);
   el.classList.toggle('max', v >= 0.80);
 }
@@ -351,14 +384,18 @@ function render(s) {
   $('clock').innerHTML = s.mhz
     ? `${s.mhz} MHz <span class="sub">sustained${s.base_mhz ? ', base ' + s.base_mhz : ''}</span>`
     : 'unavailable';
-  $('load').innerHTML = `${s.utilization.toFixed(0)}% <span class="sub">utilization</span>`;
-  $('queue').innerHTML = `${s.queue.toFixed(1)} <span class="sub">waiting, ${s.logical} processors</span>`;
-  $('memory').innerHTML = `${Math.round(s.available_mb)} MB <span class="sub">free, ${Math.round(s.hard_faults)} hard faults/s</span>`;
-  $('disk').innerHTML = `${s.disk_ms.toFixed(2)} ms <span class="sub">per transfer, queue ${s.disk_queue.toFixed(1)}</span>`;
+  $('load').innerHTML = `${s.utilization.toFixed(0)}% <span class="sub">of ${s.logical} processors executing work</span>`;
+  $('memory').innerHTML = `${mb(s.available_mb)} <span class="sub">memory available</span>`;
 
-  bar($('bar-cpu'), s.stall_cpu);
-  bar($('bar-mem'), s.stall_memory);
-  bar($('bar-io'), s.stall_io);
+  stall($('st-cpu'), s.stall_cpu, `${s.queue.toFixed(1)} threads queued`);
+  stall($('st-mem'), s.stall_memory, `${Math.round(s.hard_faults)} hard faults/sec`);
+  stall($('st-disk'), s.stall_io, `${s.disk_ms.toFixed(2)} ms per transfer`);
+
+  // Busy and waiting are different things, and the whole product rests on the
+  // difference. Saying so once beats letting three flat bars read as broken.
+  $('stall-note').textContent = Math.max(s.stall_cpu, s.stall_memory, s.stall_io) < 0.05
+    ? 'Nothing is waiting. A machine at full load with nothing queued is a machine working well.'
+    : 'Time spent waiting for a resource rather than progressing.';
 
   drawGraph(s.history);
 
