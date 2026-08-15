@@ -122,6 +122,10 @@ struct Status {
     stall_memory: f32,
     stall_io: f32,
     verdicts: Vec<VerdictView>,
+    /// Which resource drove the tier, as a bare word, or empty when nothing
+    /// did. The interface uses it to head the contributor list with the thing
+    /// being measured rather than a vague pointer at the panel above.
+    driver: String,
     /// Why the tier is what it is, in one sentence, always populated.
     ///
     /// The tier can be driven by the stall signal, which produces no verdict at
@@ -167,7 +171,8 @@ impl Default for Status {
             stall_memory: 0.0,
             stall_io: 0.0,
             verdicts: vec![],
-            reason: "Watching. Nothing has held long enough to judge yet.".into(),
+            driver: String::new(),
+            reason: "Just started. Watching for a few seconds before saying anything.".into(),
             history: vec![],
             contributors: vec![],
             temp_available: false,
@@ -242,12 +247,12 @@ async fn enable_temperature() -> Result<String, String> {
 fn remediation_text(r: loadbear_core::Remediation) -> String {
     use loadbear_core::Remediation::*;
     match r {
-        Stop => "Stop it, if you no longer need it running.",
-        ReconfigureLimit => "Lower what it is allowed to take, in Docker Desktop or .wslconfig.",
-        AddExclusion => "Exclude your build directory from it.",
-        Defer => "Postpone it until you have finished.",
-        ChangePowerState => "Plug in, or change the power profile.",
-        Physical => "Check airflow and clear any dust.",
+        Stop => "Close it if you are not using it.",
+        ReconfigureLimit => "Give it less memory in Docker Desktop settings, or in .wslconfig.",
+        AddExclusion => "Add your project folder to its exclusion list so it stops scanning it.",
+        Defer => "Pause it until you have finished what you are doing.",
+        ChangePowerState => "Plug the laptop in, or switch off battery saver.",
+        Physical => "Check the vents are clear and the fans are not blocked.",
     }
     .to_string()
 }
@@ -257,30 +262,59 @@ fn remediation_text(r: loadbear_core::Remediation) -> String {
 /// Always says something. A tier with no explanation behind it is an assertion,
 /// and an assertion the user cannot check is one they stop believing.
 fn reason_text(assessment: Assessment, settled: bool) -> String {
+    let seconds = loadbear_core::tier::ESCALATE_MS / 1000;
     match assessment.reason {
         TierReason::Clear if !settled => {
-            "Watching. Nothing has held long enough to judge yet.".to_string()
+            "Just started. Watching for a few seconds before saying anything.".to_string()
         }
-        TierReason::Clear => "Running within spec, with headroom.".to_string(),
+        TierReason::Clear => {
+            "Your machine is coping fine. Nothing is waiting for a resource.".to_string()
+        }
         TierReason::Verdict(kind) => format!(
-            "{} has held for at least {} seconds. See the finding below.",
+            "{} for over {seconds} seconds. Details below.",
             match kind {
-                VerdictKind::BelowBaseClock => "A clock below the guaranteed base",
-                VerdictKind::Throttling => "A hardware throttle signal",
-                VerdictKind::PowerOutsideBand => "Package power outside its band",
-                VerdictKind::ThermalHeadroomLow => "Low thermal headroom",
-            },
-            loadbear_core::tier::ESCALATE_MS / 1000
+                VerdictKind::BelowBaseClock =>
+                    "Your processor has been running slower than the manufacturer promises",
+                VerdictKind::Throttling => "Your processor has been holding itself back",
+                VerdictKind::PowerOutsideBand => "Power draw has been outside its rated range",
+                VerdictKind::ThermalHeadroomLow =>
+                    "Your processor has been close to its temperature limit",
+            }
         ),
         TierReason::Stall(resource) => format!(
-            "No published limit has been crossed. {} for at least {} seconds, which is measured rather than compared against a specification.",
+            "{} for over {seconds} seconds. Nothing has exceeded a manufacturer limit, so this is measured directly rather than compared against a specification.",
             match resource {
-                Resource::Cpu => "Work has been waiting for a processor",
-                Resource::Memory => "Work has been waiting on memory, which means hard page faults",
-                Resource::Io => "Work has been waiting on the disk",
-            },
-            loadbear_core::tier::ESCALATE_MS / 1000
+                Resource::Cpu => "Work has been queueing up waiting for a free processor",
+                Resource::Memory =>
+                    "Work has been stopping to fetch memory that had been pushed out to disk",
+                Resource::Io => "Work has been waiting on the disk to answer",
+            }
         ),
+    }
+}
+
+/// The resource the contributor list is ranked by, as a bare word.
+///
+/// Empty when nothing is under pressure, which is also when the list is empty.
+fn driver_word(assessment: Assessment) -> &'static str {
+    match assessment.reason {
+        TierReason::Clear => "",
+        TierReason::Stall(Resource::Memory) => "memory",
+        TierReason::Stall(Resource::Io) => "disk",
+        TierReason::Stall(Resource::Cpu) | TierReason::Verdict(_) => "cpu",
+    }
+}
+
+/// A verdict kind as a person would say it.
+///
+/// The variant names are how the engine talks about itself and are not how
+/// anybody else would. `BelowBaseClock` on screen is the code leaking out.
+fn verdict_title(kind: VerdictKind) -> &'static str {
+    match kind {
+        VerdictKind::BelowBaseClock => "Running below the promised speed",
+        VerdictKind::Throttling => "The processor is holding itself back",
+        VerdictKind::PowerOutsideBand => "Power draw outside its rated range",
+        VerdictKind::ThermalHeadroomLow => "Close to the temperature limit",
     }
 }
 
@@ -576,7 +610,7 @@ fn main() {
                             verdicts: findings
                                 .iter()
                                 .map(|f| VerdictView {
-                                    kind: format!("{:?}", f.verdict.kind),
+                                    kind: verdict_title(f.verdict.kind).to_string(),
                                     severity: format!("{:?}", f.verdict.severity),
                                     detail: f.verdict.detail.clone(),
                                     basis: f.verdict.basis.clone(),
@@ -584,6 +618,7 @@ fn main() {
                                     action: f.remediation.map(remediation_text),
                                 })
                                 .collect(),
+                            driver: driver_word(assessment).to_string(),
                             reason: reason_text(assessment, window.is_settled()),
                             history: history.iter().copied().collect(),
                             contributors: contributors(&reading, assessment),
