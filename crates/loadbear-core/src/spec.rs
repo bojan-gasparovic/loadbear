@@ -71,6 +71,76 @@ struct SpecFile {
     entries: Vec<CpuSpec>,
 }
 
+/// What a processor could be, and what it can be held to.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SpecMatch {
+    /// The guarantees to judge against. When more than one product shares this
+    /// processor's identity, this is not any one of them: it is the weakest
+    /// claim common to all of them.
+    pub spec: CpuSpec,
+    /// How many published products share the identity.
+    pub candidates: usize,
+}
+
+impl SpecMatch {
+    /// Whether exactly one product matches, so it can be named.
+    pub fn is_exact(&self) -> bool {
+        self.candidates == 1
+    }
+
+    /// How the processor should be described.
+    ///
+    /// Names the product only when the identity is unambiguous. Otherwise it
+    /// says what was actually established, because "matched to Ryzen 7 4980U"
+    /// on a 4800U is a claim LoadBear has no basis for and the user has no way
+    /// to check.
+    pub fn label(&self) -> String {
+        if self.is_exact() {
+            self.spec.name.clone()
+        } else {
+            format!(
+                "{} cores / {} threads, one of {} models sharing this processor id",
+                self.spec.cores, self.spec.threads, self.candidates
+            )
+        }
+    }
+}
+
+/// Merge candidates into the weakest claim all of them support.
+///
+/// Each field is taken in the direction that makes a verdict *less* likely to
+/// fire, so nothing is reported out of spec unless it is out of spec for every
+/// product it could be.
+fn conservative(candidates: &[&CpuSpec]) -> CpuSpec {
+    let first = candidates[0].clone();
+    if candidates.len() == 1 {
+        return first;
+    }
+
+    let min_u32 = |f: fn(&CpuSpec) -> u32| candidates.iter().map(|s| f(s)).min().unwrap_or(0);
+
+    CpuSpec {
+        // Lowest guaranteed base: the clock verdict fires only below the
+        // weakest promise on offer.
+        base_mhz: min_u32(|s| s.base_mhz),
+        boost_mhz: candidates.iter().filter_map(|s| s.boost_mhz).max(),
+        tdp_watts: min_u32(|s| s.tdp_watts),
+        // Widest power band, so neither power verdict fires on a boundary that
+        // only some candidates set.
+        ctdp_min_watts: candidates.iter().filter_map(|s| s.ctdp_min_watts).min(),
+        ctdp_max_watts: candidates.iter().filter_map(|s| s.ctdp_max_watts).max(),
+        // Highest junction limit, so thermal headroom is judged generously.
+        tjmax_c: candidates
+            .iter()
+            .filter_map(|s| s.tjmax_c)
+            .fold(None, |acc: Option<f32>, v| {
+                Some(acc.map_or(v, |a| a.max(v)))
+            }),
+        name: format!("{} and {} similar", first.name, candidates.len() - 1),
+        ..first
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct SpecDb {
     entries: Vec<CpuSpec>,
@@ -97,6 +167,50 @@ impl SpecDb {
     /// back to values read from the chip itself.
     pub fn lookup(&self, key: &CpuKey) -> Option<&CpuSpec> {
         self.entries.iter().find(|spec| spec.key() == *key)
+    }
+
+    /// Resolve a processor to the guarantees it can be held to.
+    ///
+    /// # Why this is not a lookup
+    ///
+    /// CPUID does not identify a product. Family 23 model 96 stepping 1 is
+    /// Renoir, and every Ryzen 4000U part shares it: the 4300U at a 2700 MHz
+    /// base, the 4500U at 2300, the 4800U at 1800, the 4980U at 2000. Matching
+    /// on the key alone and taking the first hit means a 4800U owner is told
+    /// their base is 2700 and watches the strongest verdict LoadBear has fire
+    /// forever on a healthy machine.
+    ///
+    /// Logical processor count separates most of a line, since those parts
+    /// ship 4, 6, 8, 12 and 16 threads. It cannot separate every pair, so
+    /// whatever remains is merged field by field into the weakest claim any
+    /// candidate makes. A verdict then fires only when the machine is out of
+    /// spec for *every* model it could possibly be, which is the same trade
+    /// made everywhere else here: never a confident wrong answer, occasionally
+    /// a missed one.
+    pub fn resolve(&self, key: &CpuKey, threads: u8) -> Option<SpecMatch> {
+        let by_key: Vec<&CpuSpec> = self.entries.iter().filter(|s| s.key() == *key).collect();
+        if by_key.is_empty() {
+            return None;
+        }
+
+        // Narrow by thread count only if it leaves something. A machine whose
+        // affinity mask hides processors would otherwise match nothing at all,
+        // and a wider candidate set is safe because merging is conservative.
+        let narrowed: Vec<&CpuSpec> = by_key
+            .iter()
+            .copied()
+            .filter(|s| s.threads == threads)
+            .collect();
+        let candidates = if narrowed.is_empty() {
+            by_key
+        } else {
+            narrowed
+        };
+
+        Some(SpecMatch {
+            spec: conservative(&candidates),
+            candidates: candidates.len(),
+        })
     }
 
     pub fn len(&self) -> usize {
@@ -155,5 +269,146 @@ mod tests {
         let spec = db.lookup(&key).unwrap();
         assert_eq!(spec.ctdp_min_watts, Some(10));
         assert_eq!(spec.ctdp_max_watts, Some(25));
+    }
+}
+
+#[cfg(test)]
+mod resolve_tests {
+    use super::*;
+
+    fn renoir(name: &str, base: u32, cores: u8, threads: u8) -> CpuSpec {
+        CpuSpec {
+            vendor: Vendor::Amd,
+            family: 23,
+            model: 96,
+            stepping: 1,
+            name: name.to_string(),
+            base_mhz: base,
+            boost_mhz: Some(4400),
+            tdp_watts: 15,
+            ctdp_min_watts: Some(10),
+            ctdp_max_watts: Some(25),
+            tjmax_c: Some(105.0),
+            cores,
+            threads,
+        }
+    }
+
+    /// The whole Ryzen 4000U line shares one CPUID.
+    fn line() -> SpecDb {
+        SpecDb {
+            entries: vec![
+                renoir("AMD Ryzen 3 4300U", 2700, 4, 4),
+                renoir("AMD Ryzen 5 4500U", 2300, 6, 6),
+                renoir("AMD Ryzen 5 4600U", 2100, 6, 12),
+                renoir("AMD Ryzen 7 4700U", 2000, 8, 8),
+                renoir("AMD Ryzen 7 4800U", 1800, 8, 16),
+                renoir("AMD Ryzen 7 4980U", 2000, 8, 16),
+            ],
+        }
+    }
+
+    fn key() -> CpuKey {
+        CpuKey {
+            vendor: Vendor::Amd,
+            family: 23,
+            model: 96,
+            stepping: 1,
+        }
+    }
+
+    #[test]
+    fn thread_count_identifies_most_of_a_line_exactly() {
+        let db = line();
+        for (threads, name) in [
+            (4u8, "AMD Ryzen 3 4300U"),
+            (6, "AMD Ryzen 5 4500U"),
+            (12, "AMD Ryzen 5 4600U"),
+            (8, "AMD Ryzen 7 4700U"),
+        ] {
+            let m = db.resolve(&key(), threads).expect("must resolve");
+            assert!(m.is_exact(), "{threads} threads should be unambiguous");
+            assert_eq!(m.label(), name);
+        }
+    }
+
+    #[test]
+    fn an_ambiguous_pair_is_judged_against_the_weakest_promise() {
+        // 4800U and 4980U are both 8C/16T with different base clocks. Picking
+        // either one names a product the machine might not be; taking the
+        // lower base means the clock verdict fires only when the machine is
+        // out of spec whichever of the two it is.
+        let m = line().resolve(&key(), 16).expect("must resolve");
+        assert_eq!(m.candidates, 2);
+        assert!(!m.is_exact());
+        assert_eq!(m.spec.base_mhz, 1800, "the weaker of the two guarantees");
+    }
+
+    #[test]
+    fn an_ambiguous_match_does_not_name_a_product() {
+        // The complaint this fixes. "matched to AMD Ryzen 7 4980U" shown to a
+        // 4800U owner is a claim with nothing behind it.
+        let m = line().resolve(&key(), 16).unwrap();
+        let label = m.label();
+        assert!(!label.contains("4980U"), "must not pick a side: {label}");
+        assert!(!label.contains("4800U"), "must not pick a side: {label}");
+        assert!(
+            label.contains("16 threads"),
+            "should say what it does know: {label}"
+        );
+    }
+
+    #[test]
+    fn the_widest_power_band_and_highest_thermal_limit_are_taken() {
+        // Every merged field must make a verdict less likely, never more.
+        let mut db = line();
+        db.entries[4].ctdp_min_watts = Some(12);
+        db.entries[4].ctdp_max_watts = Some(20);
+        db.entries[4].tjmax_c = Some(95.0);
+        let m = db.resolve(&key(), 16).unwrap();
+        assert_eq!(m.spec.ctdp_min_watts, Some(10), "lowest floor");
+        assert_eq!(m.spec.ctdp_max_watts, Some(25), "highest ceiling");
+        assert_eq!(m.spec.tjmax_c, Some(105.0), "highest junction limit");
+    }
+
+    #[test]
+    fn a_hidden_processor_count_still_resolves_rather_than_failing() {
+        // An affinity mask can make a machine report fewer threads than the
+        // part has. Matching nothing would silently disable every published
+        // check, so the key-only candidates are used and merged instead.
+        let m = line().resolve(&key(), 3).expect("must still resolve");
+        assert_eq!(m.candidates, 6);
+        assert_eq!(m.spec.base_mhz, 1800, "weakest across the whole line");
+    }
+
+    #[test]
+    fn an_unknown_processor_resolves_to_nothing() {
+        let unknown = CpuKey {
+            vendor: Vendor::Amd,
+            family: 99,
+            model: 1,
+            stepping: 0,
+        };
+        assert!(line().resolve(&unknown, 16).is_none());
+    }
+
+    #[test]
+    fn the_shipped_database_has_no_ambiguous_entries_it_cannot_separate() {
+        // A guard on the data rather than the code. Adding two products that
+        // share a CPUID *and* a thread count is allowed, but it silently costs
+        // precision, so it should be a deliberate choice rather than a
+        // surprise found later on somebody else's machine.
+        let db = SpecDb::embedded().expect("must parse");
+        let mut seen: Vec<(CpuKey, u8)> = Vec::new();
+        for e in &db.entries {
+            let id = (e.key(), e.threads);
+            assert!(
+                !seen.contains(&id),
+                "{} shares a processor id and thread count with an earlier entry, \
+                 so neither can be named exactly",
+                e.name
+            );
+            seen.push(id);
+        }
     }
 }

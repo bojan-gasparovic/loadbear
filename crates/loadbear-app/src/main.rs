@@ -512,11 +512,20 @@ fn main() {
 
                 let db = SpecDb::embedded().expect("the embedded database must parse");
                 let key = current_cpu_key();
-                let spec = key.as_ref().and_then(|k| db.lookup(k)).cloned();
                 let brand = brand_string();
                 let logical = std::thread::available_parallelism()
                     .map(|n| n.get() as u32)
                     .unwrap_or(1);
+                // Resolved against the thread count, not looked up by CPUID
+                // alone. A whole product line shares one processor id, and
+                // taking the first entry that matches would hold this machine
+                // to another model's guarantees.
+                let resolved = key
+                    .as_ref()
+                    .and_then(|k| db.resolve(k, logical.min(u8::MAX as u32) as u8));
+                let spec = resolved.as_ref().map(|m| m.spec.clone());
+                let matched_label = resolved.as_ref().map(|m| m.label());
+
                 // Installed memory does not change while the application runs.
                 let total_mb = total_physical_mb().unwrap_or(0.0);
 
@@ -662,7 +671,7 @@ fn main() {
                         *s = Status {
                             tier: format!("{tier:?}"),
                             brand: brand.clone(),
-                            matched: spec.as_ref().map(|s| s.name.clone()),
+                            matched: matched_label.clone(),
                             cores: spec.as_ref().map(|s| s.cores).unwrap_or(0),
                             threads: spec.as_ref().map(|s| s.threads).unwrap_or(0),
                             base_mhz: spec.as_ref().map(|s| s.base_mhz).unwrap_or(0),
