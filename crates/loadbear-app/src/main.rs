@@ -267,6 +267,38 @@ async fn enable_temperature() -> Result<String, String> {
     .map_err(|_| "the installer could not be started".to_string())?
 }
 
+/// Where the footer links point.
+///
+/// Hardcoded rather than passed in from the page. The commands below hand a
+/// string to the shell, and a command that accepts a URL from the interface is
+/// a command that will one day be handed something else. Nothing here is
+/// user-supplied, so nothing needs escaping or trusting.
+const REPOSITORY_URL: &str = "https://github.com/bojan-gasparovic/loadbear";
+const CONTACT_MAILTO: &str = "mailto:bojan@zeroemdashes.com";
+
+/// Hand a fixed target to whatever the system has registered for it.
+///
+/// The window is a webview with a `default-src 'self'` policy, so an ordinary
+/// link would either be blocked or navigate the application away from itself
+/// and leave the user staring at GitHub inside the tray app.
+fn open_externally(target: &'static str) -> Result<(), String> {
+    std::process::Command::new("explorer")
+        .arg(target)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn open_repository() -> Result<(), String> {
+    open_externally(REPOSITORY_URL)
+}
+
+#[tauri::command]
+fn open_contact() -> Result<(), String> {
+    open_externally(CONTACT_MAILTO)
+}
+
 /// The remediation as a sentence naming the thing the user does.
 ///
 /// Every variant has to end in an action. A finding that cannot be phrased this
@@ -466,7 +498,12 @@ fn main() {
 
     tauri::Builder::default()
         .manage(shared.clone())
-        .invoke_handler(tauri::generate_handler![get_status, enable_temperature])
+        .invoke_handler(tauri::generate_handler![
+            get_status,
+            enable_temperature,
+            open_repository,
+            open_contact
+        ])
         .setup(move |app| {
             let quit = MenuItem::with_id(app, "quit", "Quit LoadBear", true, None::<&str>)?;
             let show = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;

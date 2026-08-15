@@ -195,7 +195,15 @@
   #enable-note { display: none; margin-top: 5px; font-size: 10px; color: var(--faint); }
   #enable-note.bad { color: var(--strained); }
 
-  footer { font-size: 10px; color: var(--hair); display: flex; justify-content: space-between; }
+  footer { font-size: 10px; color: var(--hair); display: flex;
+           justify-content: space-between; align-items: baseline; gap: 12px; }
+  footer .by { display: flex; gap: 12px; align-items: baseline; }
+  /* Not real links. The webview would either refuse to load them or navigate
+     the application away from itself, so they hand a fixed target to the
+     shell instead. Styled as links because that is what they behave like. */
+  footer a { color: var(--faint); cursor: pointer; text-decoration: none;
+             border-bottom: 1px solid transparent; }
+  footer a:hover { color: var(--plot-line); border-bottom-color: var(--plot-line); }
 </style>
 </head>
 <body>
@@ -290,7 +298,14 @@
     </div>
   </div>
 
-  <footer><span id="stamp"></span></footer>
+  <footer>
+    <span id="stamp"></span>
+    <span class="by">
+      Bojan Gasparovic
+      <a id="contact">bojan@zeroemdashes.com</a>
+      <a id="repo">github.com/bojan-gasparovic/loadbear</a>
+    </span>
+  </footer>
 </div>
 
 <script>
@@ -511,6 +526,13 @@ $('enable').addEventListener('click', async () => {
     n.textContent = String(e);
     b.disabled = false; b.textContent = 'Try again';
   }
+});
+
+$('repo').addEventListener('click', () => {
+  window.__TAURI__.core.invoke('open_repository').catch(e => console.error(e));
+});
+$('contact').addEventListener('click', () => {
+  window.__TAURI__.core.invoke('open_contact').catch(e => console.error(e));
 });
 
 async function tick() {
