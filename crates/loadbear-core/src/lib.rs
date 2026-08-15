@@ -17,7 +17,7 @@ pub mod types;
 pub mod verdict;
 
 pub use attribution::{attribute, diagnose, group_by_name, ProcessGroup};
-pub use contract::{Cause, CauseKind, Finding, NotificationGate, Remediation};
+pub use contract::{Cause, CauseKind, Finding, Remediation};
 pub use spec::{CpuKey, CpuSpec, SpecDb, SpecError, Vendor};
 pub use tier::{classify, Assessment, Tier, TierReason, TierTracker};
 pub use types::{
