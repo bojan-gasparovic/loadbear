@@ -48,7 +48,8 @@
   /* Two halves matching `.cols` below, so the temperature row is exactly as
      wide as the graph underneath it and the tiles line up with its edges. */
   header { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; align-items: center; }
-  .hleft { display: grid; grid-template-columns: 46px auto 1fr; align-items: center; gap: 13px; }
+  .hleft { display: grid; grid-template-columns: 46px auto; align-items: center;
+           gap: 13px; justify-content: start; }
   /* The artwork is a flat white silhouette with only its alpha carrying
      shape, so it is invisible on a light background as an image. Painted
      through a mask it takes the tier colour, which loses nothing and puts the
@@ -62,30 +63,30 @@
   #tier.braced { color: var(--braced); }
   #tier.strained { color: var(--strained); }
 
-  /* The sentence explaining the tier sits in the header beside it, because a
-     colour and its explanation should never be far enough apart to read one
-     without the other. */
-  #why { font-size: 11.5px; color: var(--dim); line-height: 1.45;
-         padding-left: 15px; border-left: 1px solid var(--line); align-self: stretch;
-         display: flex; align-items: center; }
 
   .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; overflow: hidden; min-height: 0; }
   /* Explicit rows rather than flow, so a section that is empty still holds its
      slot and nothing below it moves when it fills. */
-  .col-left { display: grid; grid-template-rows: auto auto auto 1fr; gap: 11px;
+  .col-left { display: grid; grid-template-rows: auto auto 1fr; gap: 10px;
               overflow: hidden; min-height: 0; }
-  .col-right { display: grid; grid-template-rows: auto 1fr 1fr; gap: 11px;
+  .col-right { display: grid; grid-template-rows: 132px 1fr; gap: 10px;
                overflow: hidden; min-height: 0; }
   .col-left > *, .col-right > * { min-height: 0; overflow: hidden; }
+
+  /* Things that belong together share a box. The border is the grouping. */
+  .panel { background: var(--panel); border: 1px solid var(--line);
+           border-radius: 8px; padding: 9px 11px; display: flex;
+           flex-direction: column; min-height: 0; overflow: hidden; }
+  .panel > h2 { flex: none; }
+  .panel .body { flex: 1 1 auto; min-height: 0; overflow: hidden; }
 
   #cpu { padding-bottom: 10px; border-bottom: 1px solid var(--line); }
   #brand { font-size: 12.5px; }
   #matched { font-size: 11px; color: var(--faint); margin-top: 2px; }
 
-  .rows { display: grid; gap: 1px; background: var(--line);
-          border: 1px solid var(--line); border-radius: 7px; overflow: hidden; }
+  .rows { display: grid; gap: 0; }
   .row { display: grid; grid-template-columns: 62px 1fr; gap: 10px;
-         background: var(--panel); padding: 6px 10px; align-items: baseline; }
+         padding: 3px 0; align-items: baseline; }
   .k { color: var(--faint); font-size: 11px; }
   .v { font-variant-numeric: tabular-nums; font-size: 12px; }
   .v .sub { color: var(--dim); font-size: 10.5px; }
@@ -111,18 +112,18 @@
        margin: 0 0 6px; font-weight: 600; }
   h2 .hint { font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--hair); }
 
-  .graph svg { width: 100%; height: 50px; display: block;
-               background: var(--panel); border: 1px solid var(--line); border-radius: 7px 7px 0 0; }
-  .graph .strip { display: flex; height: 4px; border: 1px solid var(--line);
-                  border-top: 0; border-radius: 0 0 7px 7px; overflow: hidden; background: var(--panel); }
+  .graph { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; }
+  .graph svg { width: 100%; flex: 1 1 auto; min-height: 40px; display: block; }
+  .graph .strip { display: flex; height: 4px; overflow: hidden; flex: none;
+                  border-radius: 2px; margin-top: 3px; }
   .graph .strip i { flex: 1 1 0; }
   .graph .cap { display: flex; justify-content: space-between; font-size: 9.5px;
                 color: var(--hair); margin-top: 4px; }
 
   #verdicts { overflow: hidden; }
-  .verdict { border-left: 2px solid var(--strained); background: var(--panel);
-             border: 1px solid var(--line); border-left: 2px solid var(--strained);
-             border-radius: 0 5px 5px 0; padding: 7px 10px; margin-bottom: 6px; }
+  #why { font-size: 11.5px; color: var(--dim); line-height: 1.4; }
+  .verdict { border-left: 2px solid var(--strained); background: var(--well);
+             border-radius: 0 5px 5px 0; padding: 6px 9px; margin-top: 6px; }
   .verdict.degraded { border-left-color: var(--braced); }
   .verdict .vk { font-size: 11px; font-weight: 620; margin-bottom: 2px; }
   .verdict .vd { font-size: 11.5px; color: var(--text); }
@@ -134,8 +135,9 @@
 
   .quiet { color: var(--faint); font-size: 11.5px; }
 
-  .plist .p { display: grid; grid-template-columns: 1fr 46px 62px; gap: 7px;
-              font-size: 11px; padding: 3px 0; align-items: baseline; }
+  .plist { height: 100%; overflow: hidden; }
+  .plist .p { display: grid; grid-template-columns: 1fr 44px 60px; gap: 7px;
+              font-size: 11px; padding: 2px 0; align-items: baseline; }
   .plist .p .pn { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .plist .p .pv { text-align: right; color: var(--dim); font-variant-numeric: tabular-nums; }
   .plist .p.head { color: var(--hair); font-size: 9px; text-transform: uppercase; letter-spacing: .05em; }
@@ -190,7 +192,6 @@
         <div class="title">LoadBear</div>
         <div id="tier" class="easy">Easy</div>
       </div>
-      <div id="why">Starting up.</div>
     </div>
     <div id="temp">
       <div id="zones"></div>
@@ -202,64 +203,73 @@
 
   <div class="cols">
     <div class="col-left">
-      <div id="cpu">
-        <div id="brand">Reading...</div>
-        <div id="matched"></div>
-      </div>
-
-      <div class="rows">
-        <div class="row"><div class="k">Clock</div><div class="v" id="clock">-</div></div>
-        <div class="row"><div class="k">Busy</div><div class="v" id="load">-</div></div>
-        <div class="row"><div class="k">Memory</div><div class="v" id="memory">-</div></div>
-      </div>
-
-      <div>
-      <h2>Bottlenecks</h2>
-      <div class="stalls">
-        <div class="st" id="st-cpu">
-          <div class="sl">processor</div>
-          <div class="track"><div class="fill"></div></div>
-          <div class="sv">0%</div>
-          <div class="sr"></div>
-        </div>
-        <div class="st" id="st-mem">
-          <div class="sl">memory</div>
-          <div class="track"><div class="fill"></div></div>
-          <div class="sv">0%</div>
-          <div class="sr"></div>
-        </div>
-        <div class="st" id="st-disk">
-          <div class="sl">disk</div>
-          <div class="track"><div class="fill"></div></div>
-          <div class="sv">0%</div>
-          <div class="sr"></div>
+      <div class="panel">
+        <h2>Processor</h2>
+        <div class="body">
+          <div id="brand">Reading...</div>
+          <div id="matched"></div>
+          <div class="rows">
+            <div class="row"><div class="k">Clock</div><div class="v" id="clock">-</div></div>
+            <div class="row"><div class="k">Busy</div><div class="v" id="load">-</div></div>
+            <div class="row"><div class="k">Memory</div><div class="v" id="memory">-</div></div>
+          </div>
         </div>
       </div>
+
+      <div class="panel">
+        <h2>Bottlenecks</h2>
+        <div class="body">
+          <div class="stalls">
+            <div class="st" id="st-cpu">
+              <div class="sl">processor</div>
+              <div class="track"><div class="fill"></div></div>
+              <div class="sv">0%</div>
+              <div class="sr"></div>
+            </div>
+            <div class="st" id="st-mem">
+              <div class="sl">memory</div>
+              <div class="track"><div class="fill"></div></div>
+              <div class="sv">0%</div>
+              <div class="sr"></div>
+            </div>
+            <div class="st" id="st-disk">
+              <div class="sl">disk</div>
+              <div class="track"><div class="fill"></div></div>
+              <div class="sv">0%</div>
+              <div class="sr"></div>
+            </div>
+          </div>
+        </div>
       </div>
 
-      <div></div>
+      <div class="panel">
+        <h2>Last 5 minutes</h2>
+        <div class="body graph">
+          <svg id="chart" viewBox="0 0 200 100" preserveAspectRatio="none" aria-hidden="true"></svg>
+          <div class="strip" id="strip"></div>
+          <div class="cap">
+            <span><b style="color:var(--plot-line)">&#9473;</b> busy</span>
+            <span><b style="color:var(--strained)">&#9473;</b> waiting</span>
+            <span>now</span>
+          </div>
+        </div>
+      </div>
     </div>
 
     <div class="col-right">
-      <div class="graph">
-        <svg id="chart" viewBox="0 0 200 100" preserveAspectRatio="none" aria-hidden="true"></svg>
-        <div class="strip" id="strip"></div>
-        <div class="cap">
-          <span>5 min ago</span>
-          <span><b style="color:var(--plot-line)">&#9473;</b> busy &nbsp;
-                <b style="color:var(--strained)">&#9473;</b> waiting</span>
-          <span>now</span>
+      <div class="panel">
+        <h2>Findings</h2>
+        <div class="body">
+          <div id="why"></div>
+          <div id="verdicts"></div>
         </div>
       </div>
 
-      <div>
-        <h2>Findings</h2>
-        <div id="verdicts"></div>
-      </div>
-
-      <div id="contributors-block">
-        <h2 id="contrib-head">Heaviest processes</h2>
-        <div class="plist" id="contributors"></div>
+      <div class="panel">
+        <h2 id="running-head">Running</h2>
+        <div class="body">
+          <div class="plist" id="running"></div>
+        </div>
       </div>
     </div>
   </div>
@@ -334,7 +344,6 @@ function drawGraph(history) {
 // Nothing scrolls, so anything that will not fit is dropped and counted rather
 // than pushed out of sight.
 const VERDICT_SLOTS = 2;
-const CONTRIBUTOR_SLOTS = 6;
 
 // One row. More cores than this and the rest are left off rather than allowed
 // to wrap and push the header taller, because the header is a fixed slot.
@@ -342,15 +351,13 @@ const CORE_TILES = 8;
 
 // The contributor list is headed with the thing it is ranked by, rather than
 // pointing vaguely at the panel above it.
-const CONTRIB_HEAD = {
-  cpu: 'Using the most processor',
-  memory: 'Holding the most memory',
-  disk: 'Holding the most memory',
+// The list reorders itself to answer whichever question the rest of the window
+// is asking, so it says which order it is in.
+const RUNNING_HEAD = {
+  cpu: 'Running · by processor',
+  memory: 'Running · by memory',
+  disk: 'Running · by memory',
 };
-
-// With no bottleneck there is no resource to name, and "Using the most" on its
-// own is a dangling phrase over an empty box.
-const CONTRIB_HEAD_IDLE = 'Heaviest processes';
 
 // Tiles for cores and nothing else. The package figure is an average of what
 // the tiles already show, so it took a line to repeat them.
@@ -447,17 +454,15 @@ function render(s) {
       + (hidden > 0 ? `<div class="more">and ${hidden} more</div>` : '');
   }
 
-  // Filled only when a resource is under pressure, but the panel is always
-  // there. A list that appears and disappears moves everything under it.
-  $('contrib-head').textContent = CONTRIB_HEAD[s.driver] || CONTRIB_HEAD_IDLE;
-  $('contributors').innerHTML = !s.contributors.length ? ''
-    : '<div class="p head"><div class="pn">name</div><div class="pv">cpu</div><div class="pv">memory</div></div>'
-      + s.contributors.slice(0, CONTRIBUTOR_SLOTS).map(c => `
-        <div class="p${c.is_container ? ' container' : ''}">
-          <div class="pn">${esc(c.name)}</div>
-          <div class="pv">${c.cpu.toFixed(1)}%</div>
-          <div class="pv">${mb(c.memory_mb)}${c.limit_mb ? ' / ' + mb(c.limit_mb) : ''}</div>
-        </div>`).join('');
+  $('running-head').textContent = RUNNING_HEAD[s.driver] || 'Running';
+  $('running').innerHTML =
+    '<div class="p head"><div class="pn">application</div><div class="pv">cpu</div><div class="pv">memory</div></div>'
+    + s.running.map(c => `
+      <div class="p${c.is_container ? ' container' : ''}">
+        <div class="pn">${esc(c.name)}</div>
+        <div class="pv">${c.cpu.toFixed(1)}%</div>
+        <div class="pv">${mb(c.memory_mb)}${c.limit_mb ? ' / ' + mb(c.limit_mb) : ''}</div>
+      </div>`).join('');
 
   drawTemperature(s);
 

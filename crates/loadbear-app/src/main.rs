@@ -68,6 +68,11 @@ struct HistoryPoint {
 /// Roughly five minutes at the sampling interval.
 const HISTORY_POINTS: usize = 200;
 
+/// How many process groups the running list holds.
+///
+/// The panel has a fixed height and nothing scrolls, so this is what fits.
+const RUNNING_ROWS: usize = 14;
+
 /// One temperature tile.
 ///
 /// The band is decided here rather than in the interface, because which colour
@@ -136,12 +141,12 @@ struct Status {
     reason: String,
     /// The last few minutes, per tick.
     history: Vec<HistoryPoint>,
-    /// The heaviest processes on the resource that drove the tier.
+    /// Everything running, heaviest first.
     ///
-    /// Empty while the machine is fine. A list of what is running is Task
-    /// Manager and helps nobody; the same list shown because a specific
-    /// resource is under pressure is an explanation.
-    contributors: Vec<Contributor>,
+    /// Sorted by whichever resource is the bottleneck when there is one, so
+    /// the list reorders itself to answer the question being asked rather than
+    /// always ranking by processor.
+    running: Vec<Contributor>,
     temp_available: bool,
     /// Whether the unavailable state is one the user can act on.
     temp_offerable: bool,
@@ -177,7 +182,7 @@ impl Default for Status {
             driver: String::new(),
             reason: "Starting up.".into(),
             history: vec![],
-            contributors: vec![],
+            running: vec![],
             temp_available: false,
             temp_offerable: false,
             temp_zones: vec![],
@@ -314,35 +319,37 @@ fn verdict_title(kind: VerdictKind) -> &'static str {
     }
 }
 
-/// The heaviest processes on the resource that actually drove the tier.
+/// Everything running, heaviest first, with containers under Docker.
 ///
-/// Deliberately empty while the machine is fine. A list of what is running,
-/// refreshing every second and reordering itself, is Task Manager and tells
-/// nobody anything. The same list, shown because a named resource is under
-/// pressure and ranked by that resource, is an explanation of the tier.
+/// Ranked by whichever resource is the bottleneck. When nothing is wrong that
+/// is the processor, which is what a person means by "what is my machine
+/// doing"; when memory is the bottleneck it ranks by memory, so the list
+/// answers the question the rest of the window is asking.
 ///
 /// This is not the attribution. A cause is only *named* when the evidence
-/// clears the bar in `loadbear_core::attribution`, and this list appears
-/// whether or not it did, so the user can see what LoadBear was looking at when
-/// it declined to name anything.
-fn contributors(reading: &Reading, assessment: Assessment) -> Vec<Contributor> {
+/// clears the bar in `loadbear_core::attribution`, and this list is always
+/// here, so a user can see what LoadBear was looking at when it declined to
+/// name anything.
+fn running_list(reading: &Reading, assessment: Assessment) -> Vec<Contributor> {
     let resource = match assessment.reason {
-        TierReason::Clear => return Vec::new(),
         TierReason::Stall(r) => r,
-        // A verdict is about the processor, so rank by what is demanding it.
-        TierReason::Verdict(_) => Resource::Cpu,
+        TierReason::Clear | TierReason::Verdict(_) => Resource::Cpu,
     };
 
     let mut groups = loadbear_core::group_by_name(&reading.processes);
     match resource {
-        Resource::Cpu => groups.sort_by(|a, b| b.cpu_percent.total_cmp(&a.cpu_percent)),
+        Resource::Cpu => groups.sort_by(|a, b| {
+            b.cpu_percent
+                .total_cmp(&a.cpu_percent)
+                .then(b.working_set_bytes.cmp(&a.working_set_bytes))
+        }),
         Resource::Memory | Resource::Io => {
             groups.sort_by_key(|g| std::cmp::Reverse(g.working_set_bytes))
         }
     }
 
     let mut rows = Vec::new();
-    for g in groups.iter().take(4) {
+    for g in groups.iter().take(RUNNING_ROWS) {
         let docker = is_docker_name(&g.name);
         rows.push(Contributor {
             name: if docker {
@@ -620,7 +627,7 @@ fn main() {
                             driver: driver_word(assessment).to_string(),
                             reason: reason_text(assessment, window.is_settled()),
                             history: history.iter().copied().collect(),
-                            contributors: contributors(&reading, assessment),
+                            running: running_list(&reading, assessment),
                             temp_available,
                             temp_offerable,
                             temp_zones: published

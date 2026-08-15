@@ -99,6 +99,11 @@ const SYSTEM_PROCESSES: [(&str, Remediation); 6] = [
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProcessGroup {
     pub name: String,
+    /// The friendly name, when any member of the group carried one.
+    ///
+    /// Display only. Grouping and matching stay on `name`, so what LoadBear
+    /// decides cannot change because a vendor edited a version resource.
+    pub display: Option<String>,
     /// The largest single member, which is what a user would go looking for.
     pub representative_pid: u32,
     pub count: usize,
@@ -108,11 +113,15 @@ pub struct ProcessGroup {
 
 impl ProcessGroup {
     /// How the group should be described to a person.
+    ///
+    /// Prefers the friendly name, so a user reads "Realtek HD Audio Universal
+    /// Service" rather than `RtkAudUService64` and can tell whether they care.
     pub fn label(&self) -> String {
+        let name = self.display.as_deref().unwrap_or(&self.name);
         if self.count > 1 {
-            format!("{} ({} processes)", self.name, self.count)
+            format!("{name} ({} processes)", self.count)
         } else {
-            self.name.clone()
+            name.to_string()
         }
     }
 }
@@ -126,6 +135,9 @@ pub fn group_by_name(processes: &[ProcessReading]) -> Vec<ProcessGroup> {
         match groups.iter_mut().find(|g| g.name.to_lowercase() == key) {
             Some(g) => {
                 g.count += 1;
+                if g.display.is_none() {
+                    g.display.clone_from(&p.display_name);
+                }
                 g.cpu_percent += p.cpu_percent;
                 g.working_set_bytes = g.working_set_bytes.saturating_add(p.working_set_bytes);
                 // The representative is the biggest single member, so that
@@ -136,6 +148,7 @@ pub fn group_by_name(processes: &[ProcessReading]) -> Vec<ProcessGroup> {
             }
             None => groups.push(ProcessGroup {
                 name: p.name.clone(),
+                display: p.display_name.clone(),
                 representative_pid: p.pid,
                 count: 1,
                 cpu_percent: p.cpu_percent,
@@ -249,6 +262,7 @@ fn io_leader(reading: &Reading) -> Option<ProcessGroup> {
 
     Some(ProcessGroup {
         name: leader.name.clone(),
+        display: leader.display_name.clone(),
         representative_pid: leader.pid,
         count: 1,
         cpu_percent: leader.cpu_percent,
@@ -434,6 +448,7 @@ mod tests {
         ProcessReading {
             pid,
             name: name.to_string(),
+            display_name: None,
             working_set_bytes: (ws_gb * GB as f32) as u64,
             hard_faults_per_sec: None,
             cpu_percent: cpu,
@@ -483,6 +498,40 @@ mod tests {
             detail: "test".to_string(),
             basis: "test".to_string(),
         }
+    }
+
+    #[test]
+    fn a_group_is_labelled_with_the_name_a_person_would_use() {
+        let mut ps = vec![proc(100, "RtkAudUService64", 5.0, 0.1)];
+        ps[0].display_name = Some("Realtek HD Audio Universal Service".to_string());
+        let groups = group_by_name(&ps);
+        assert_eq!(groups[0].label(), "Realtek HD Audio Universal Service");
+    }
+
+    #[test]
+    fn a_group_falls_back_to_the_executable_when_there_is_no_friendly_name() {
+        let groups = group_by_name(&[proc(100, "vmmem", 5.0, 11.0)]);
+        assert_eq!(groups[0].label(), "vmmem");
+    }
+
+    #[test]
+    fn a_friendly_name_survives_grouping_and_carries_the_count() {
+        let mut ps: Vec<ProcessReading> =
+            (0..4).map(|i| proc(100 + i, "chrome", 5.0, 0.4)).collect();
+        // Only one member happens to be readable, which is enough to name all.
+        ps[2].display_name = Some("Google Chrome".to_string());
+        let groups = group_by_name(&ps);
+        assert_eq!(groups[0].label(), "Google Chrome (4 processes)");
+    }
+
+    #[test]
+    fn matching_stays_on_the_executable_name_not_the_friendly_one() {
+        // Docker resolution keys off the executable, so a vendor changing their
+        // version resource must not be able to break a diagnosis.
+        let mut r = reading(vec![proc(100, "vmmem", 5.0, 11.0)], 30.0, memory_stalled());
+        r.processes[0].display_name = Some("Some Rebranded Thing".to_string());
+        let (cause, _) = attribute(&r, Resource::Memory).expect("must still resolve as Docker");
+        assert_eq!(cause.label, "Docker");
     }
 
     #[test]

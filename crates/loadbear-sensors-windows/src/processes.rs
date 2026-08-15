@@ -65,12 +65,13 @@ fn filetime_to_u64(ft: FILETIME) -> u64 {
     ((ft.dwHighDateTime as u64) << 32) | ft.dwLowDateTime as u64
 }
 
-/// The executable name, without its path or extension.
+/// The executable name without its path or extension, and the full path.
 ///
-/// Attribution groups by this, so `C:\Program Files\...\Code.exe` and a second
-/// copy of it from another directory are treated as the same thing, which is
-/// what a user means by "VS Code is using the CPU".
-fn image_name(handle: HANDLE) -> Option<String> {
+/// Attribution groups by the name, so `C:\Program Files\...\Code.exe` and a
+/// second copy of it from another directory are treated as the same thing,
+/// which is what a user means by "VS Code is using the CPU". The full path is
+/// kept because the friendly name lives inside the file itself.
+fn image_name(handle: HANDLE) -> Option<(String, String)> {
     let mut buf = [0u16; MAX_PATH as usize];
     let mut len = buf.len() as u32;
     // SAFETY: `handle` is open with PROCESS_QUERY_LIMITED_INFORMATION, which is
@@ -85,14 +86,118 @@ fn image_name(handle: HANDLE) -> Option<String> {
     if stem.is_empty() {
         None
     } else {
-        Some(stem.to_string())
+        Some((stem.to_string(), full.clone()))
     }
+}
+
+/// The name a person would call the application, read from the executable.
+///
+/// Windows executables carry a version resource, and `FileDescription` inside
+/// it is the string the vendor wrote for humans. It is where Task Manager gets
+/// "Antimalware Service Executable" from `MsMpEng.exe`, and it means LoadBear
+/// needs no mapping table of its own to maintain and can name applications it
+/// has never heard of.
+///
+/// Returns `None` for anything with no version resource, which covers much of
+/// the operating system's own processes. The caller falls back to the file
+/// name, so an unnamed process is still identified, just less pleasantly.
+fn file_description(path: &str) -> Option<String> {
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW,
+    };
+
+    let wide_path: Vec<u16> = path.encode_utf16().chain(std::iter::once(0)).collect();
+
+    // SAFETY: `wide_path` is NUL terminated and outlives the call. A null
+    // second argument is documented as ignored.
+    let size = unsafe { GetFileVersionInfoSizeW(wide_path.as_ptr(), std::ptr::null_mut()) };
+    if size == 0 {
+        return None;
+    }
+
+    let mut buffer = vec![0u8; size as usize];
+    // SAFETY: `buffer` is `size` bytes, which is what the call above asked for.
+    let ok = unsafe {
+        GetFileVersionInfoW(
+            wide_path.as_ptr(),
+            0,
+            size,
+            buffer.as_mut_ptr() as *mut std::ffi::c_void,
+        )
+    };
+    if ok == 0 {
+        return None;
+    }
+
+    // The description is filed under a language and codepage pair, and which
+    // pair depends on how the vendor built the binary. The translation table
+    // says which pairs exist, so ask it rather than assuming US English.
+    let (language, codepage) = translation(&buffer)?;
+    let key = format!("\\StringFileInfo\\{language:04x}{codepage:04x}\\FileDescription");
+    let wide_key: Vec<u16> = key.encode_utf16().chain(std::iter::once(0)).collect();
+
+    let mut value: *mut std::ffi::c_void = std::ptr::null_mut();
+    let mut len: u32 = 0;
+    // SAFETY: `buffer` holds a version resource, `wide_key` is NUL terminated,
+    // and both outputs are writable. The returned pointer borrows `buffer`.
+    let ok = unsafe {
+        VerQueryValueW(
+            buffer.as_ptr() as *const std::ffi::c_void,
+            wide_key.as_ptr(),
+            &mut value,
+            &mut len,
+        )
+    };
+    if ok == 0 || value.is_null() || len == 0 {
+        return None;
+    }
+
+    // SAFETY: on success this points into `buffer` and holds `len` UTF-16 code
+    // units, including a trailing NUL that is trimmed below.
+    let text = unsafe { std::slice::from_raw_parts(value as *const u16, len as usize) };
+    let text = String::from_utf16_lossy(text);
+    let text = text.trim_end_matches('\0').trim();
+
+    if text.is_empty() {
+        None
+    } else {
+        Some(text.to_string())
+    }
+}
+
+/// The first language and codepage pair the version resource declares.
+fn translation(buffer: &[u8]) -> Option<(u16, u16)> {
+    use windows_sys::Win32::Storage::FileSystem::VerQueryValueW;
+
+    let key: Vec<u16> = "\\VarFileInfo\\Translation"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    let mut value: *mut std::ffi::c_void = std::ptr::null_mut();
+    let mut len: u32 = 0;
+    // SAFETY: as above. `len` comes back as a byte count.
+    let ok = unsafe {
+        VerQueryValueW(
+            buffer.as_ptr() as *const std::ffi::c_void,
+            key.as_ptr(),
+            &mut value,
+            &mut len,
+        )
+    };
+    if ok == 0 || value.is_null() || len < 4 {
+        return None;
+    }
+    // SAFETY: the block is a sequence of two `u16` fields per translation, and
+    // `len` was checked to hold at least one pair.
+    let pair = unsafe { std::slice::from_raw_parts(value as *const u16, 2) };
+    Some((pair[0], pair[1]))
 }
 
 /// One process as the OS reports it, before any differencing.
 struct RawProcess {
     pid: u32,
     name: String,
+    path: String,
     cpu_100ns: u64,
     working_set_bytes: u64,
 }
@@ -106,7 +211,7 @@ fn read_process(pid: u32) -> Option<RawProcess> {
     }
 
     let result = (|| {
-        let name = image_name(handle)?;
+        let (name, path) = image_name(handle)?;
 
         let mut creation = FILETIME::default();
         let mut exit = FILETIME::default();
@@ -131,6 +236,7 @@ fn read_process(pid: u32) -> Option<RawProcess> {
         Some(RawProcess {
             pid,
             name,
+            path,
             cpu_100ns: filetime_to_u64(kernel) + filetime_to_u64(user),
             working_set_bytes: counters.WorkingSetSize as u64,
         })
@@ -167,6 +273,14 @@ pub struct ProcessSampler {
     previous: HashMap<u32, u64>,
     last_sample_ms: Option<u64>,
     logical_cpus: u32,
+    /// Friendly names by executable path.
+    ///
+    /// Reading a version resource means opening and parsing the file, which is
+    /// far too expensive to repeat for every process on every tick. The answer
+    /// cannot change while a binary stays where it is, so it is read once. A
+    /// path with no description caches the failure too, so a process without
+    /// one is not retried forever.
+    names: HashMap<String, Option<String>>,
 }
 
 impl ProcessSampler {
@@ -175,6 +289,7 @@ impl ProcessSampler {
             previous: HashMap::new(),
             last_sample_ms: None,
             logical_cpus: logical_cpus.max(1),
+            names: HashMap::new(),
         }
     }
 
@@ -199,14 +314,31 @@ impl ProcessSampler {
             .map(|last| now_ms.saturating_sub(last))
             .unwrap_or(0);
 
+        let shares: Vec<f32> = raw
+            .iter()
+            .map(|p| self.share_of_machine(p, elapsed_ms))
+            .collect();
+
         let readings = raw
             .iter()
-            .map(|p| ProcessReading {
-                pid: p.pid,
-                name: p.name.clone(),
-                working_set_bytes: p.working_set_bytes,
-                hard_faults_per_sec: None,
-                cpu_percent: self.share_of_machine(p, elapsed_ms),
+            .zip(shares)
+            .map(|(p, cpu_percent)| {
+                let display_name = match self.names.get(&p.path) {
+                    Some(cached) => cached.clone(),
+                    None => {
+                        let found = file_description(&p.path);
+                        self.names.insert(p.path.clone(), found.clone());
+                        found
+                    }
+                };
+                ProcessReading {
+                    pid: p.pid,
+                    name: p.name.clone(),
+                    display_name,
+                    working_set_bytes: p.working_set_bytes,
+                    hard_faults_per_sec: None,
+                    cpu_percent,
+                }
             })
             .collect();
 
@@ -262,6 +394,7 @@ mod tests {
         let p = RawProcess {
             pid: 1,
             name: "test".to_string(),
+            path: String::new(),
             cpu_100ns: 999_999_999,
             working_set_bytes: 0,
         };
@@ -279,6 +412,7 @@ mod tests {
         let p = RawProcess {
             pid: 1,
             name: "test".to_string(),
+            path: String::new(),
             // One second of CPU in 100ns units, over one second of wall clock.
             cpu_100ns: 10_000_000,
             working_set_bytes: 0,
@@ -297,6 +431,7 @@ mod tests {
         let p = RawProcess {
             pid: 1,
             name: "test".to_string(),
+            path: String::new(),
             cpu_100ns: 8 * 10_000_000,
             working_set_bytes: 0,
         };
@@ -310,6 +445,7 @@ mod tests {
         let p = RawProcess {
             pid: 1,
             name: "test".to_string(),
+            path: String::new(),
             cpu_100ns: 10_000_000,
             working_set_bytes: 0,
         };
@@ -324,10 +460,29 @@ mod tests {
         let p = RawProcess {
             pid: 1,
             name: "test".to_string(),
+            path: String::new(),
             cpu_100ns: 1_000,
             working_set_bytes: 0,
         };
         assert_eq!(sampler.share_of_machine(&p, 1500), 0.0);
+    }
+
+    #[test]
+    fn this_machine_names_real_applications_rather_than_executables() {
+        // The claim the whole friendly naming idea rests on, so it is measured
+        // rather than assumed. Every vendor ships a version resource; much of
+        // Windows itself does not, which is why the fallback exists.
+        let mut sampler = ProcessSampler::new(16);
+        let readings = sampler.sample(1_000);
+        let named = readings.iter().filter(|p| p.display_name.is_some()).count();
+        assert!(
+            named * 2 > readings.len(),
+            "most processes should carry a description, got {named} of {}",
+            readings.len()
+        );
+        for p in readings.iter().filter_map(|p| p.display_name.as_ref()) {
+            assert!(!p.is_empty(), "a description must not be blank");
+        }
     }
 
     #[test]
@@ -376,7 +531,13 @@ mod tests {
                 .map(|n| n.get() as u32)
                 .unwrap_or(1),
         );
-        let first = sampler.sample(1_000);
+        // Real elapsed time, not a fabricated interval. Sampling itself takes
+        // a variable amount of wall clock, and feeding a shorter figure than
+        // actually passed divides real CPU time by a made up denominator and
+        // inflates every share. That produced a test which passed alone and
+        // failed whenever the machine was busy with the rest of the suite.
+        let started = std::time::Instant::now();
+        let first = sampler.sample(0);
         assert!(
             first.iter().all(|p| p.cpu_percent == 0.0),
             "the first sample has no baseline to difference against"
@@ -384,7 +545,7 @@ mod tests {
 
         // Give the machine something to have done between samples.
         std::thread::sleep(std::time::Duration::from_millis(400));
-        let second = sampler.sample(1_400);
+        let second = sampler.sample(started.elapsed().as_millis() as u64);
 
         let total: f32 = second.iter().map(|p| p.cpu_percent).sum();
         assert!(

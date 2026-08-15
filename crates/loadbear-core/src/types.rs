@@ -89,7 +89,14 @@ pub struct CpuReading {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProcessReading {
     pub pid: u32,
+    /// The executable name, which is what LoadBear matches on.
     pub name: String,
+    /// The name a person would call it, when the executable carries one.
+    ///
+    /// Matching stays on `name` because that is stable and is what the Docker
+    /// and system process lists are written against. This is for display only,
+    /// so a vendor renaming their product cannot change a diagnosis.
+    pub display_name: Option<String>,
     pub working_set_bytes: u64,
     pub hard_faults_per_sec: Option<f32>,
     pub cpu_percent: f32,
