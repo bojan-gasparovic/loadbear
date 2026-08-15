@@ -124,7 +124,6 @@ struct Status {
     temp_available: bool,
     /// Whether the unavailable state is one the user can act on.
     temp_offerable: bool,
-    temp_summary: String,
     /// Labelled per-zone readings, so the interface can lay them out rather
     /// than parse them back out of a sentence.
     temp_zones: Vec<(String, f32)>,
@@ -158,7 +157,6 @@ impl Default for Status {
             contributors: vec![],
             temp_available: false,
             temp_offerable: false,
-            temp_summary: String::new(),
             temp_zones: vec![],
             temp_reason: String::new(),
         }
@@ -302,7 +300,11 @@ fn contributors(reading: &Reading, assessment: Assessment) -> Vec<Contributor> {
     for g in groups.iter().take(4) {
         let docker = is_docker_name(&g.name);
         rows.push(Contributor {
-            name: if docker { "Docker".to_string() } else { g.label() },
+            name: if docker {
+                "Docker".to_string()
+            } else {
+                g.label()
+            },
             cpu: g.cpu_percent,
             memory_mb: g.working_set_bytes as f64 / 1_048_576.0,
             is_container: false,
@@ -572,10 +574,6 @@ fn main() {
                             contributors: contributors(&reading, assessment),
                             temp_available,
                             temp_offerable,
-                            temp_summary: match published.as_ref().and_then(|s| s.package()) {
-                                Some(c) => format!("{c:.1} C package"),
-                                None => "no reading".to_string(),
-                            },
                             temp_zones: published
                                 .as_ref()
                                 .map(|s| s.zone_list())

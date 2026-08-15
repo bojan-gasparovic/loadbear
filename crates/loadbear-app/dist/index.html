@@ -34,7 +34,7 @@
     display: grid; grid-template-rows: auto 1fr auto; gap: 12px; overflow: hidden;
   }
 
-  header { display: grid; grid-template-columns: 46px auto 1fr; align-items: center; gap: 13px; }
+  header { display: grid; grid-template-columns: 46px auto 1fr auto; align-items: center; gap: 13px; }
   #bear { width: 46px; height: 46px; opacity: .95; }
   .title { font-size: 10px; letter-spacing: .16em; text-transform: uppercase; color: var(--faint); }
   #tier { font-size: 23px; font-weight: 620; letter-spacing: -.01em; line-height: 1.1; }
@@ -109,20 +109,24 @@
   .plist .p.container .pn { padding-left: 13px; color: var(--dim); position: relative; }
   .plist .p.container .pn::before { content: "\21B3"; position: absolute; left: 1px; color: #4c525b; }
 
-  .temp { padding: 9px 11px; background: var(--panel); border: 1px solid var(--line); border-radius: 7px; }
-  .temp .t1 { font-size: 11.5px; }
-  .temp .t2 { font-size: 10.5px; color: var(--faint); margin-top: 3px; line-height: 1.45; }
-  #enable { margin-top: 8px; display: none; font: inherit; font-size: 11px; font-weight: 560;
+  /* Temperature lives in the header rather than in a panel of its own. Per
+     core tiles and nothing else: the package figure was the average of what
+     these already say, so it cost a line and told nobody anything new. */
+  #temp { justify-self: end; text-align: right; max-width: 250px; }
+  #zones { display: none; grid-template-columns: repeat(4, 38px); gap: 3px; }
+  #zones .z { background: #1b1e24; border-radius: 4px; padding: 2px 3px; text-align: center; }
+  #zones .zl { font-size: 8px; color: #4c525b; letter-spacing: .03em; line-height: 1.2; }
+  #zones .zv { font-size: 11px; font-variant-numeric: tabular-nums; line-height: 1.25; }
+  #zones .z.hot .zv { color: var(--braced); }
+  #zones .z.max .zv { color: var(--strained); }
+  #temp-note { font-size: 10.5px; color: var(--faint); line-height: 1.4; }
+  #enable { margin-top: 6px; display: none; font: inherit; font-size: 10.5px; font-weight: 560;
             color: #0e0f12; background: var(--text); border: 0; border-radius: 5px;
-            padding: 5px 11px; cursor: pointer; }
+            padding: 4px 10px; cursor: pointer; }
   #enable:hover:not(:disabled) { background: #fff; }
   #enable:disabled { opacity: .5; cursor: default; }
-  #enable-note { display: none; margin-top: 6px; font-size: 10.5px; color: var(--faint); }
+  #enable-note { display: none; margin-top: 5px; font-size: 10px; color: var(--faint); }
   #enable-note.bad { color: var(--strained); }
-  #zones { display: none; grid-template-columns: repeat(4, 1fr); gap: 4px; margin-top: 7px; }
-  #zones .z { background: #1b1e24; border-radius: 4px; padding: 4px 5px; text-align: center; }
-  #zones .zl { font-size: 8.5px; color: var(--faint); text-transform: uppercase; letter-spacing: .04em; }
-  #zones .zv { font-size: 11.5px; font-variant-numeric: tabular-nums; margin-top: 1px; }
 
   footer { font-size: 10px; color: #3f444c; display: flex; justify-content: space-between; }
 </style>
@@ -136,6 +140,12 @@
       <div id="tier" class="easy">Easy</div>
     </div>
     <div id="why">Starting up.</div>
+    <div id="temp">
+      <div id="zones"></div>
+      <div id="temp-note"></div>
+      <button id="enable">Enable temperature</button>
+      <div id="enable-note"></div>
+    </div>
   </header>
 
   <div class="cols">
@@ -159,13 +169,6 @@
         <div class="bar" id="bar-io"><div class="lab"><span>io</span><span class="pct">0%</span></div><div class="track"><div class="fill"></div></div></div>
       </div>
 
-      <div class="temp">
-        <div class="t1" id="temp1">Temperature</div>
-        <div class="t2" id="temp2"></div>
-        <div id="zones"></div>
-        <button id="enable">Enable temperature</button>
-        <div id="enable-note"></div>
-      </div>
     </div>
 
     <div class="col">
@@ -251,6 +254,40 @@ function drawGraph(history) {
 const VERDICT_SLOTS = 2;
 const CONTRIBUTOR_SLOTS = 6;
 
+// Two rows of four. More cores than this and the rest are left off rather than
+// allowed to push the header taller, because the header is a fixed slot.
+const CORE_TILES = 8;
+
+// Tiles for cores and nothing else. The package figure is an average of what
+// the tiles already show, so it took a line to repeat them.
+//
+// LoadBear never invents a normal range, so a tile is never coloured against
+// one. Colour comes from headroom below the vendor's own TjMax, and when TjMax
+// is unknown the tiles stay uncoloured rather than guessing.
+function drawTemperature(s) {
+  const zones = (s.temp_zones || []).filter(([label]) => /^core/i.test(label));
+  const z = $('zones'), note = $('temp-note'), en = $('enable');
+
+  if (zones.length) {
+    z.style.display = 'grid';
+    note.textContent = '';
+    z.innerHTML = zones.slice(0, CORE_TILES).map(([label, val]) => {
+      const n = label.replace(/^core\s*/i, '');
+      return `<div class="z"><div class="zl">${esc(n)}</div><div class="zv">${val.toFixed(0)}</div></div>`;
+    }).join('');
+  } else {
+    z.style.display = 'none';
+    // Per core readings are the point. Without them, say so briefly rather
+    // than falling back to a single number pretending to be the same thing.
+    note.textContent = s.temp_available
+      ? 'No per core temperature from this processor.'
+      : s.temp_reason;
+  }
+
+  en.style.display = s.temp_offerable ? 'inline-block' : 'none';
+  if (!en.disabled) en.textContent = s.temp_available ? 'Update helper' : 'Enable temperature';
+}
+
 function render(s) {
   const tier = s.tier.toLowerCase();
   $('tier').textContent = s.tier;
@@ -313,21 +350,7 @@ function render(s) {
         </div>`).join('');
   }
 
-  $('temp1').textContent = s.temp_available ? s.temp_summary : 'Temperature unavailable';
-  $('temp2').textContent = s.temp_available ? '' : s.temp_reason;
-  const en = $('enable');
-  en.style.display = s.temp_offerable ? 'inline-block' : 'none';
-  if (!en.disabled) en.textContent = s.temp_available ? 'Update helper' : 'Enable temperature';
-
-  const z = $('zones');
-  if (s.temp_zones && s.temp_zones.length) {
-    z.style.display = 'grid';
-    z.innerHTML = s.temp_zones.slice(0, 8).map(([label, val]) =>
-      `<div class="z"><div class="zl">${esc(label)}</div><div class="zv">${val.toFixed(1)}</div></div>`
-    ).join('');
-  } else {
-    z.style.display = 'none';
-  }
+  drawTemperature(s);
 
   $('stamp').textContent = new Date().toLocaleTimeString();
 }
