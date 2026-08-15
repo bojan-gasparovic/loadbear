@@ -117,8 +117,14 @@
   .graph .strip { display: flex; height: 4px; overflow: hidden; flex: none;
                   border-radius: 2px; margin-top: 3px; }
   .graph .strip i { flex: 1 1 0; }
-  .graph .cap { display: flex; justify-content: space-between; font-size: 9.5px;
-                color: var(--hair); margin-top: 4px; }
+  .graph .cap { display: flex; justify-content: space-between; align-items: baseline;
+                font-size: 10px; color: var(--hair); margin-top: 5px; }
+  /* The legend colours the word rather than a swatch beside it. A single dash
+     glyph at this size reads as grey whatever colour it is actually painted. */
+  .graph .cap i { font-style: normal; font-weight: 650; margin-left: 11px; }
+  .graph .cap i:first-child { margin-left: 0; }
+  .graph .cap .k-busy { color: var(--plot-line); }
+  .graph .cap .k-wait { color: var(--strained); }
 
   #verdicts { overflow: hidden; }
   #why { font-size: 11.5px; color: var(--dim); line-height: 1.4; }
@@ -248,8 +254,8 @@
           <svg id="chart" viewBox="0 0 200 100" preserveAspectRatio="none" aria-hidden="true"></svg>
           <div class="strip" id="strip"></div>
           <div class="cap">
-            <span><b style="color:var(--plot-line)">&#9473;</b> busy</span>
-            <span><b style="color:var(--strained)">&#9473;</b> waiting</span>
+            <span>5 min ago</span>
+            <span><i class="k-busy">busy</i><i class="k-wait">waiting</i></span>
             <span>now</span>
           </div>
         </div>
@@ -334,8 +340,8 @@ function drawGraph(history) {
 
   svg.innerHTML =
     `<polygon points="0,100 ${util} 200,100" fill="${ink('--plot-fill')}" />` +
-    `<polyline points="${util}" fill="none" stroke="${ink('--plot-line')}" stroke-width="1" vector-effect="non-scaling-stroke" />` +
-    `<polyline points="${stall}" fill="none" stroke="${ink('--strained')}" stroke-width="1" stroke-opacity=".9" vector-effect="non-scaling-stroke" />`;
+    `<polyline points="${util}" fill="none" stroke="${ink('--plot-line')}" stroke-width="1.5" vector-effect="non-scaling-stroke" />` +
+    `<polyline points="${stall}" fill="none" stroke="${ink('--strained')}" stroke-width="1.5" vector-effect="non-scaling-stroke" />`;
 
   strip.innerHTML = history.map(h =>
     `<i style="background:${TIER_COLOR[h.tier] || TIER_COLOR[0]}"></i>`).join('');
