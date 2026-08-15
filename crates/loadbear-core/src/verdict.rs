@@ -163,10 +163,6 @@ pub fn evaluate(reading: &Reading, spec: Option<&CpuSpec>) -> Vec<Verdict> {
         }
     }
 
-    let Some(spec) = spec else {
-        return verdicts;
-    };
-
     // Utilization is required rather than optional here. Absent, the machine
     // cannot be said to be asking for performance, and the check is skipped so
     // that a backend which cannot measure demand yet stays silent instead of
@@ -176,23 +172,42 @@ pub fn evaluate(reading: &Reading, spec: Option<&CpuSpec>) -> Vec<Verdict> {
         .utilization_pct
         .is_some_and(|u| u >= MIN_UTILIZATION_FOR_BASE_CLOCK_PCT);
 
-    if let (Some(mhz), true) = (reading.cpu.all_core_mhz, under_demand) {
-        if mhz < spec.base_mhz {
+    // The base clock comes from the specification database when the processor
+    // is in it, and from the machine itself when it is not. Reaching it only
+    // through the database meant the strongest verdict LoadBear has stayed
+    // silent on every processor nobody had hand-entered, which is nearly all
+    // of them.
+    let base = spec
+        .map(|s| (s.base_mhz, format!("{} publishes", s.name)))
+        .or_else(|| {
+            reading
+                .cpu
+                .reported_base_mhz
+                .map(|m| (m, "This processor reports".to_string()))
+        });
+
+    if let (Some(mhz), Some((base_mhz, authority)), true) =
+        (reading.cpu.all_core_mhz, base, under_demand)
+    {
+        if mhz < base_mhz {
             let utilization = reading.cpu.utilization_pct.unwrap_or_default();
             verdicts.push(Verdict {
                 kind: VerdictKind::BelowBaseClock,
                 severity: Severity::OutOfSpec,
                 detail: format!(
-                    "Every processor is busy, and the clock is {mhz} MHz against a guaranteed {} MHz. Busy and slow at the same time means something is holding the clock down rather than the machine running out of work.",
-                    spec.base_mhz
+                    "Every processor is busy, and the clock is {mhz} MHz against a guaranteed {base_mhz} MHz. Busy and slow at the same time means something is holding the clock down rather than the machine running out of work."
                 ),
                 basis: format!(
-                    "{} publishes {} MHz as the base clock, which the vendor guarantees at the rated TDP. Measured at {utilization:.0} percent utilization, so the processor is being asked for it.",
-                    spec.name, spec.base_mhz
+                    "{authority} {base_mhz} MHz as its base clock, which is guaranteed at the rated TDP. Measured at {utilization:.0} percent utilization, so the processor is being asked for it."
                 ),
             });
         }
     }
+
+    // Everything below needs figures no machine reports about itself.
+    let Some(spec) = spec else {
+        return verdicts;
+    };
 
     if let Some(watts) = reading.cpu.package_watts {
         let ceiling = spec.ctdp_max_watts.unwrap_or(spec.tdp_watts) as f32;
@@ -279,6 +294,7 @@ mod tests {
     pub(super) fn healthy_cpu() -> CpuReading {
         CpuReading {
             all_core_mhz: Some(2400),
+            reported_base_mhz: None,
             utilization_pct: Some(95.0),
             package_watts: Some(15.0),
             package_temp_c: Some(70.0),
@@ -401,6 +417,62 @@ mod tests {
     }
 
     #[test]
+    fn an_unknown_processor_is_still_held_to_the_base_clock_it_reports() {
+        // The point of the whole exercise. Three processors are in the shipped
+        // database, so reaching the base clock only through it meant the
+        // strongest verdict LoadBear has said nothing on any other machine.
+        let mut cpu = healthy_cpu();
+        cpu.all_core_mhz = Some(1400);
+        cpu.reported_base_mhz = Some(2000);
+        let verdicts = evaluate(&reading(cpu), None);
+        let v = verdicts
+            .iter()
+            .find(|v| v.kind == VerdictKind::BelowBaseClock)
+            .expect("a machine that reports its own base clock can be judged against it");
+        assert!(
+            v.basis.contains("This processor reports"),
+            "the weaker authority must be stated rather than implied: {}",
+            v.basis
+        );
+    }
+
+    #[test]
+    fn a_published_figure_is_preferred_over_the_machines_own() {
+        let mut cpu = healthy_cpu();
+        cpu.all_core_mhz = Some(1400);
+        cpu.reported_base_mhz = Some(1500);
+        let verdicts = evaluate(&reading(cpu), Some(&spec()));
+        let v = verdicts
+            .iter()
+            .find(|v| v.kind == VerdictKind::BelowBaseClock)
+            .expect("must flag");
+        assert!(
+            v.basis.contains("AMD Ryzen 7 4980U publishes"),
+            "got {}",
+            v.basis
+        );
+        assert!(
+            v.detail.contains("2000"),
+            "the published figure wins: {}",
+            v.detail
+        );
+    }
+
+    #[test]
+    fn a_processor_with_no_base_clock_from_anywhere_is_not_judged() {
+        let mut cpu = healthy_cpu();
+        cpu.all_core_mhz = Some(1400);
+        cpu.reported_base_mhz = None;
+        let verdicts = evaluate(&reading(cpu), None);
+        assert!(
+            !verdicts
+                .iter()
+                .any(|v| v.kind == VerdictKind::BelowBaseClock),
+            "with no guarantee from either source there is nothing to judge against"
+        );
+    }
+
+    #[test]
     fn without_a_spec_only_chip_sourced_verdicts_are_produced() {
         let mut cpu = healthy_cpu();
         cpu.all_core_mhz = Some(800);
@@ -486,6 +558,7 @@ mod tests {
     fn missing_optional_readings_produce_no_verdicts_rather_than_panicking() {
         let cpu = CpuReading {
             all_core_mhz: None,
+            reported_base_mhz: None,
             utilization_pct: None,
             package_watts: None,
             package_temp_c: None,

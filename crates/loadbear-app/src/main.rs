@@ -649,7 +649,8 @@ fn main() {
                         stall: to_stall(&judged, logical),
                         cpu: CpuReading {
                             all_core_mhz: judged.actual_mhz(),
-                            utilization_pct: Some(judged.processor_time_pct as f32),
+                            reported_base_mhz: None,
+            utilization_pct: Some(judged.processor_time_pct as f32),
                             package_watts: published.as_ref().and_then(|s| s.watts()),
                             package_temp_c: published.as_ref().and_then(|s| s.package()),
                             tjmax_c: spec.as_ref().and_then(|s| s.tjmax_c),

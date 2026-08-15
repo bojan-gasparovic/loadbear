@@ -64,6 +64,7 @@ fn main() {
             stall: to_stall(&sample, logical),
             cpu: CpuReading {
                 all_core_mhz: sample.actual_mhz(),
+                reported_base_mhz: None,
                 utilization_pct: Some(sample.processor_time_pct as f32),
                 package_watts: None,
                 package_temp_c: None,

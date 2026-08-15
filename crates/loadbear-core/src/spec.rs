@@ -518,3 +518,141 @@ mod data_tests {
         }
     }
 }
+
+/// Plausible range for anything claiming to be a base clock, in MHz.
+const PLAUSIBLE_BASE_MHZ: std::ops::RangeInclusive<u32> = 400..=6000;
+
+/// How far the two independent sources may disagree and still be believed.
+///
+/// They are both meant to be the same published figure, so any real
+/// disagreement means one of them is not the base clock at all.
+const BASE_AGREEMENT_MHZ: u32 = 50;
+
+/// The base clock as the machine itself reports it, when it can be trusted.
+///
+/// # Why this exists
+///
+/// `base_mhz` is the load bearing number in the whole product, and reaching it
+/// through the specification database means LoadBear has nothing to say on any
+/// processor nobody has hand-entered. That is most of them.
+///
+/// The operating system already publishes the figure. Windows reports a
+/// nominal frequency that the performance counters are expressed as a
+/// percentage of, and it read exactly 2000 MHz on a Ryzen 7 4980U across every
+/// sample at every load, matching the published base clock. So the database is
+/// better treated as an enhancement, carrying the things the machine genuinely
+/// cannot supply, rather than as a prerequisite for saying anything at all.
+///
+/// # Why it is cross-checked
+///
+/// On some systems the nominal figure is a marketing number rather than the
+/// base clock. Many parts also carry the frequency in their CPUID brand
+/// string, as in `i7-8550U CPU @ 1.80GHz`, which is a second and independent
+/// statement of the same thing. Where both exist they must agree, and where
+/// they do not, neither is trusted: a wrong base clock produces a permanent
+/// verdict on a healthy machine, which is the failure this codebase exists to
+/// avoid.
+///
+/// Where only the operating system offers a figure it is used on its own, as
+/// on OEM parts whose brand string carries no frequency at all.
+pub fn reported_base_mhz(os_nominal_mhz: u32, brand: Option<&str>) -> Option<u32> {
+    if !PLAUSIBLE_BASE_MHZ.contains(&os_nominal_mhz) {
+        return None;
+    }
+    match brand.and_then(base_from_brand) {
+        Some(from_brand) => {
+            let gap = os_nominal_mhz.abs_diff(from_brand);
+            (gap <= BASE_AGREEMENT_MHZ).then_some(os_nominal_mhz)
+        }
+        None => Some(os_nominal_mhz),
+    }
+}
+
+/// Pull a base frequency out of a CPUID brand string, if it states one.
+///
+/// Intel writes `Intel(R) Core(TM) i7-8550U CPU @ 1.80GHz`. AMD usually does
+/// not, and OEM exclusive parts frequently carry no model number either, so an
+/// absent figure is ordinary rather than a failure.
+pub fn base_from_brand(brand: &str) -> Option<u32> {
+    let tail = brand.split('@').nth(1)?.trim();
+    let digits: String = tail
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '.')
+        .collect();
+    let value: f64 = digits.parse().ok()?;
+    let lower = tail.to_ascii_lowercase();
+
+    let mhz = if lower.contains("ghz") {
+        (value * 1000.0).round() as u32
+    } else if lower.contains("mhz") {
+        value.round() as u32
+    } else {
+        return None;
+    };
+
+    PLAUSIBLE_BASE_MHZ.contains(&mhz).then_some(mhz)
+}
+
+#[cfg(test)]
+mod reported_base_tests {
+    use super::*;
+
+    #[test]
+    fn a_brand_string_frequency_is_read_in_either_unit() {
+        assert_eq!(
+            base_from_brand("Intel(R) Core(TM) i7-8550U CPU @ 1.80GHz"),
+            Some(1800)
+        );
+        assert_eq!(base_from_brand("Some CPU @ 2400MHz"), Some(2400));
+    }
+
+    #[test]
+    fn a_brand_string_without_a_frequency_yields_nothing() {
+        // The real one from the machine this was built on. OEM parts often
+        // carry no model number and no frequency at all.
+        assert_eq!(
+            base_from_brand("AMD Ryzen 7 Microsoft Surface (R) Edition"),
+            None
+        );
+        assert_eq!(
+            base_from_brand("AMD Ryzen 7 4980U with Radeon Graphics"),
+            None
+        );
+    }
+
+    #[test]
+    fn the_operating_systems_figure_is_used_when_it_is_the_only_one() {
+        // Measured: Windows reported a nominal 2000 MHz on a Ryzen 7 4980U in
+        // every sample at every load, matching the published base clock, on a
+        // machine whose brand string states no frequency.
+        assert_eq!(
+            reported_base_mhz(2000, Some("AMD Ryzen 7 Microsoft Surface (R) Edition")),
+            Some(2000)
+        );
+        assert_eq!(reported_base_mhz(2000, None), Some(2000));
+    }
+
+    #[test]
+    fn two_sources_that_agree_are_believed() {
+        assert_eq!(
+            reported_base_mhz(1800, Some("Intel(R) Core(TM) i7-8550U CPU @ 1.80GHz")),
+            Some(1800)
+        );
+    }
+
+    #[test]
+    fn two_sources_that_disagree_are_both_discarded() {
+        // One of them is not the base clock, and there is no way to tell which.
+        // Believing either produces a permanent verdict on a healthy machine.
+        assert_eq!(
+            reported_base_mhz(3600, Some("Intel(R) Core(TM) i7-8550U CPU @ 1.80GHz")),
+            None
+        );
+    }
+
+    #[test]
+    fn an_implausible_figure_is_refused() {
+        assert_eq!(reported_base_mhz(0, None), None);
+        assert_eq!(reported_base_mhz(99_000, None), None);
+    }
+}

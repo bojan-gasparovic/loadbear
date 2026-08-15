@@ -64,6 +64,7 @@ fn a_machine_pinned_by_this_test_attributes_the_load_to_this_test() {
             stall: to_stall(&sample, logical as u32),
             cpu: CpuReading {
                 all_core_mhz: sample.actual_mhz(),
+                reported_base_mhz: None,
                 utilization_pct: Some(sample.processor_time_pct as f32),
                 package_watts: None,
                 package_temp_c: None,
@@ -135,6 +136,7 @@ fn an_unloaded_machine_is_not_forced_into_naming_something() {
         },
         cpu: CpuReading {
             all_core_mhz: sample.actual_mhz(),
+            reported_base_mhz: None,
             utilization_pct: Some(sample.processor_time_pct as f32),
             package_watts: None,
             package_temp_c: None,

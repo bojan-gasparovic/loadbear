@@ -478,6 +478,7 @@ mod tests {
             stall,
             cpu: CpuReading {
                 all_core_mhz: Some(1400),
+                reported_base_mhz: None,
                 utilization_pct: Some(utilization),
                 package_watts: None,
                 package_temp_c: None,

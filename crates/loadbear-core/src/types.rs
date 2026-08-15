@@ -75,6 +75,12 @@ pub struct CpuReading {
     /// anyway: a clock guarantee can only be tested while the processor is
     /// being asked for performance. See [`crate::verdict`].
     pub utilization_pct: Option<f32>,
+    /// The base clock the machine itself reports, already cross-checked.
+    ///
+    /// Present so the strongest verdict LoadBear has does not depend on
+    /// somebody having hand-entered this processor into a database. See
+    /// [`crate::spec::reported_base_mhz`].
+    pub reported_base_mhz: Option<u32>,
     pub package_watts: Option<f32>,
     pub package_temp_c: Option<f32>,
     pub tjmax_c: Option<f32>,
