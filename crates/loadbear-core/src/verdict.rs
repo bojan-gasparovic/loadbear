@@ -18,6 +18,14 @@ pub enum VerdictKind {
     Throttling,
     /// Package power outside the rated or configurable TDP band.
     PowerOutsideBand,
+    /// Package power below what the part is rated to draw, while under load.
+    ///
+    /// Separate from [`Self::PowerOutsideBand`] because it is a different
+    /// event with a different remedy. Drawing too much is the chip exceeding
+    /// its envelope; drawing too little under full load means the platform is
+    /// not supplying what the processor is rated for, and the fix is outside
+    /// the machine rather than inside it.
+    PowerBelowRating,
     /// Close to the junction temperature limit.
     ThermalHeadroomLow,
 }
@@ -199,6 +207,27 @@ pub fn evaluate(reading: &Reading, spec: Option<&CpuSpec>) -> Vec<Verdict> {
                     .to_string(),
             });
         }
+
+        // Drawing far less than the part is rated for, while every processor
+        // is busy, means something outside the processor is limiting it.
+        //
+        // Gated on demand for the same reason the clock check is: a machine
+        // sitting idle draws almost nothing and that is correct behaviour, not
+        // a starved platform.
+        let floor = spec.ctdp_min_watts.unwrap_or(spec.tdp_watts) as f32;
+        if under_demand && watts < floor {
+            verdicts.push(Verdict {
+                kind: VerdictKind::PowerBelowRating,
+                severity: Severity::Degraded,
+                detail: format!(
+                    "Every processor is busy and the package is drawing {watts:.1} W, below the {floor:.0} W this processor is rated to draw. It is being supplied less power than it is built to use."
+                ),
+                basis: format!(
+                    "{} publishes a configurable TDP floor of {floor:.0} W. Package power read from the processor's own energy counters.",
+                    spec.name
+                ),
+            });
+        }
     }
 
     verdicts
@@ -297,6 +326,51 @@ mod tests {
         };
         let verdicts = evaluate(&reading(cpu), Some(&spec()));
         assert!(verdicts.iter().any(|v| v.kind == VerdictKind::Throttling));
+    }
+
+    #[test]
+    fn a_starved_platform_is_flagged_when_every_processor_is_busy() {
+        // Measured on 2026-08-15. On an underpowered USB-C supply this machine
+        // held its package at roughly 9.3 W against a 10 W configurable floor
+        // and could not reach its 2000 MHz base clock. Swapping to the rated
+        // charger raised the sustained all-core clock from about 1150 MHz to
+        // about 1930, a difference of roughly sixty percent that the user had
+        // no way of seeing.
+        let mut cpu = healthy_cpu();
+        cpu.package_watts = Some(9.3);
+        cpu.utilization_pct = Some(100.0);
+        let verdicts = evaluate(&reading(cpu), Some(&spec()));
+        let v = verdicts
+            .iter()
+            .find(|v| v.kind == VerdictKind::PowerBelowRating)
+            .expect("a part drawing under its floor at full load is being starved");
+        assert!(v.detail.contains("9.3"));
+        assert!(v.basis.contains("10 W"), "got basis: {}", v.basis);
+    }
+
+    #[test]
+    fn an_idle_machine_drawing_little_power_is_not_starved() {
+        // The obvious false positive. An idle processor draws almost nothing
+        // and that is correct behaviour, not a supply problem.
+        let mut cpu = healthy_cpu();
+        cpu.package_watts = Some(2.0);
+        cpu.utilization_pct = Some(4.0);
+        let verdicts = evaluate(&reading(cpu), Some(&spec()));
+        assert!(!verdicts
+            .iter()
+            .any(|v| v.kind == VerdictKind::PowerBelowRating));
+    }
+
+    #[test]
+    fn power_inside_the_band_under_load_is_not_flagged_either_way() {
+        let mut cpu = healthy_cpu();
+        cpu.package_watts = Some(15.0);
+        cpu.utilization_pct = Some(100.0);
+        let verdicts = evaluate(&reading(cpu), Some(&spec()));
+        assert!(!verdicts.iter().any(|v| matches!(
+            v.kind,
+            VerdictKind::PowerBelowRating | VerdictKind::PowerOutsideBand
+        )));
     }
 
     #[test]

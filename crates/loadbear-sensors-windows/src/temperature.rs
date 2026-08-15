@@ -57,6 +57,10 @@ impl TemperatureStatus {
 /// does not attempt a device open on every sampling tick.
 pub struct WindowsTemperature {
     device: Option<PawnIo>,
+    /// Package power, over the same driver handle. Created lazily on the
+    /// first read, because the energy unit register is only worth asking for
+    /// on a machine where the device actually opened.
+    power: Option<crate::power::PackagePower>,
     /// Second executor for the SMU table. A PawnIO executor holds one module,
     /// and per-core temperature comes from a different module than the die
     /// reading does.
@@ -81,6 +85,7 @@ impl WindowsTemperature {
             Err(PawnIoError::NotInstalled) => {
                 return Self {
                     device: None,
+                    power: None,
                     per_core: None,
                     cores,
                     status: TemperatureStatus::Unavailable {
@@ -95,6 +100,7 @@ impl WindowsTemperature {
             Err(e) => {
                 return Self {
                     device: None,
+                    power: None,
                     per_core: None,
                     cores,
                     status: TemperatureStatus::Unavailable {
@@ -112,6 +118,7 @@ impl WindowsTemperature {
             Vendor::Other => {
                 return Self {
                     device: None,
+                    power: None,
                     per_core: None,
                     cores,
                     status: TemperatureStatus::Unavailable {
@@ -130,6 +137,7 @@ impl WindowsTemperature {
             // than anything being broken.
             return Self {
                 device: None,
+                power: None,
                 per_core: None,
                 cores,
                 status: TemperatureStatus::Unavailable {
@@ -150,6 +158,7 @@ impl WindowsTemperature {
 
         Self {
             device: Some(device),
+            power: None,
             per_core,
             cores,
             status: TemperatureStatus::Available,
@@ -159,6 +168,19 @@ impl WindowsTemperature {
 
     pub fn status(&self) -> &TemperatureStatus {
         &self.status
+    }
+
+    /// Average package power since the previous call, when available.
+    ///
+    /// Shares the driver handle with temperature. `None` on a part with no
+    /// RAPL counters, on a machine with no driver, and on the first call,
+    /// since power is a difference between two energy readings.
+    pub fn package_watts(&mut self, now_ms: u64) -> Option<f32> {
+        let device = self.device.as_ref()?;
+        if self.power.is_none() {
+            self.power = crate::power::PackagePower::new(device);
+        }
+        self.power.as_mut()?.read(device, now_ms)
     }
 
     /// Read temperature, or return an empty reading.

@@ -53,6 +53,13 @@ fn main() -> Result<(), windows_service::Error> {
     }
     // Diagnostic scaffolding, not product behaviour. Needs elevation, which is
     // why it lives in the helper rather than the interface.
+    // Verifies the RAPL energy counters before they are trusted in the helper.
+    // Elevation is required for the driver, which is why this cannot simply be
+    // a test in the sensors crate.
+    if std::env::args().any(|a| a == "--probe-power") {
+        std::process::exit(probe_power());
+    }
+
     if std::env::args().any(|a| a == "--dump-pmtable") {
         std::process::exit(pmtable::dump());
     }
@@ -121,6 +128,39 @@ fn run() -> Result<(), windows_service::Error> {
     Ok(())
 }
 
+/// Read package power a few times and print it, so the numbers can be judged
+/// against something else before anything depends on them.
+fn probe_power() -> i32 {
+    let key = current_cpu_key();
+    let mut temp = WindowsTemperature::new(key.as_ref());
+
+    println!("package power from the RAPL energy counters");
+    println!("first reading is absent by design: power is a difference, not a level");
+    println!();
+
+    let mut seen = 0;
+    for i in 0..12 {
+        let now = now_ms();
+        match temp.package_watts(now) {
+            Some(w) => {
+                println!("  {i:>2}  {w:>7.2} W");
+                seen += 1;
+            }
+            None => println!("  {i:>2}        -"),
+        }
+        std::thread::sleep(Duration::from_millis(1000));
+    }
+
+    println!();
+    if seen == 0 {
+        println!("No readings. Either this part has no RAPL counters or the driver refused.");
+        return 1;
+    }
+    println!("Compare against another tool's package power. On a 15 W part this");
+    println!("should sit in single digits at idle and climb into the teens under load.");
+    0
+}
+
 fn sample_loop(stop: &AtomicBool) {
     // If the mapping cannot be created there is nothing useful to do, and
     // failing quietly is better than a service that spins doing nothing.
@@ -132,11 +172,16 @@ fn sample_loop(stop: &AtomicBool) {
     let mut temp = WindowsTemperature::new(key.as_ref());
 
     while !stop.load(Ordering::Relaxed) {
+        let now = now_ms();
         let reading = temp.read();
+        // Absent on the first pass, since power is the difference between two
+        // energy readings and there has only been one.
+        let watts = temp.package_watts(now);
 
         let mut out = SharedTemperature {
-            timestamp_ms: now_ms(),
+            timestamp_ms: now,
             package_c: reading.package_c.unwrap_or(f32::NAN),
+            package_watts: watts.unwrap_or(f32::NAN),
             ..Default::default()
         };
 

@@ -273,7 +273,9 @@ fn remediation_text(r: loadbear_core::Remediation) -> String {
         ReconfigureLimit => "Give it less memory in Docker Desktop settings, or in .wslconfig.",
         AddExclusion => "Add your project folder to its exclusion list so it stops scanning it.",
         Defer => "Pause it until you have finished what you are doing.",
-        ChangePowerState => "Plug the laptop in, or switch off battery saver.",
+        ChangePowerState => {
+            "Check the charger. An underpowered supply limits how hard the processor may work."
+        }
         Physical => "Check the vents are clear and the fans are not blocked.",
     }
     .to_string()
@@ -325,6 +327,8 @@ fn describe(reason: TierReason) -> String {
                 VerdictKind::BelowBaseClock => "Running slower than the manufacturer promises",
                 VerdictKind::Throttling => "The processor is holding itself back",
                 VerdictKind::PowerOutsideBand => "Power draw outside its rated range",
+                VerdictKind::PowerBelowRating =>
+                    "The machine is not getting the power it is rated for",
                 VerdictKind::ThermalHeadroomLow => "Close to the temperature limit",
             }
         ),
@@ -360,6 +364,7 @@ fn verdict_title(kind: VerdictKind) -> &'static str {
         VerdictKind::BelowBaseClock => "Running below the promised speed",
         VerdictKind::Throttling => "The processor is holding itself back",
         VerdictKind::PowerOutsideBand => "Power draw outside its rated range",
+        VerdictKind::PowerBelowRating => "Not getting the power it is rated for",
         VerdictKind::ThermalHeadroomLow => "Close to the temperature limit",
     }
 }
@@ -593,7 +598,7 @@ fn main() {
                         cpu: CpuReading {
                             all_core_mhz: judged.actual_mhz(),
                             utilization_pct: Some(judged.processor_time_pct as f32),
-                            package_watts: None,
+                            package_watts: published.as_ref().and_then(|s| s.watts()),
                             package_temp_c: published.as_ref().and_then(|s| s.package()),
                             tjmax_c: spec.as_ref().and_then(|s| s.tjmax_c),
                             throttle: ThrottleState {

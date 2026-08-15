@@ -407,6 +407,9 @@ fn resource_for(reading: &Reading, verdict: &Verdict) -> Option<Resource> {
         | VerdictKind::Throttling
         | VerdictKind::PowerOutsideBand
         | VerdictKind::ThermalHeadroomLow => Some(Resource::Cpu),
+        // Nothing running is responsible for the platform supplying too little
+        // power, so there is no process to rank and no resource to rank by.
+        VerdictKind::PowerBelowRating => None,
     }
 }
 
@@ -419,6 +422,20 @@ pub fn diagnose(reading: &Reading, verdicts: Vec<Verdict>) -> Vec<Finding> {
     verdicts
         .into_iter()
         .map(|verdict| {
+            // A starved platform has a cause, but it is not a process. This is
+            // the one case where the answer is the machine's own power supply,
+            // and both the cause kind and the remedy were defined for it long
+            // before anything could produce them.
+            if verdict.kind == VerdictKind::PowerBelowRating {
+                return Finding {
+                    verdict,
+                    cause: Some(Cause {
+                        label: "The power being supplied to this machine".to_string(),
+                        kind: CauseKind::PowerState,
+                    }),
+                    remediation: Some(Remediation::ChangePowerState),
+                };
+            }
             let attributed = resource_for(reading, &verdict).and_then(|r| attribute(reading, r));
             match attributed {
                 Some((cause, remediation)) => Finding {
@@ -773,6 +790,22 @@ mod tests {
         r.processes[1].hard_faults_per_sec = Some(20.0);
         let (cause, _) = attribute(&r, Resource::Io).expect("a reported figure is attributable");
         assert_eq!(cause.label, "code");
+    }
+
+    #[test]
+    fn a_starved_platform_blames_the_power_supply_rather_than_a_process() {
+        // Every other finding names something running. This one must not: no
+        // process is responsible for the machine being supplied too little
+        // power, and killing the heaviest one would not help.
+        let r = reading(vec![proc(100, "rustc", 70.0, 1.0)], 100.0, quiet());
+        let findings = diagnose(&r, vec![verdict(VerdictKind::PowerBelowRating)]);
+        let f = &findings[0];
+        assert_eq!(f.cause.as_ref().unwrap().kind, CauseKind::PowerState);
+        assert_eq!(f.remediation, Some(Remediation::ChangePowerState));
+        assert!(
+            f.is_actionable(),
+            "a starved platform is one of the few findings with a fix the user can act on directly"
+        );
     }
 
     #[test]

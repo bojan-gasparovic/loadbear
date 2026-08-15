@@ -38,7 +38,7 @@ pub const MAPPING_SDDL: &str = "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GR;;;BU)";
 ///
 /// The reader refuses a version it does not know rather than misinterpreting
 /// the bytes, which matters because the two processes are upgraded separately.
-pub const LAYOUT_VERSION: u32 = 2;
+pub const LAYOUT_VERSION: u32 = 3;
 
 /// Behaviour revision of the helper.
 ///
@@ -50,7 +50,7 @@ pub const LAYOUT_VERSION: u32 = 2;
 /// lifetime. Without it, a helper that predates a feature keeps running
 /// forever and the feature simply never appears, with nothing anywhere saying
 /// why. That happened once already.
-pub const HELPER_REVISION: u32 = 2;
+pub const HELPER_REVISION: u32 = 3;
 
 /// Maximum temperature zones carried. Renoir reports one die plus up to eight
 /// CCD slots, so sixteen is generous without being wasteful.
@@ -94,6 +94,12 @@ pub struct SharedTemperature {
     pub timestamp_ms: u64,
     /// Package temperature, or NaN when there is no reading.
     pub package_c: f32,
+    /// Package power in watts, or NaN when there is no reading.
+    ///
+    /// Absent on the first sample after the helper starts, because it is
+    /// derived by differencing an energy counter and one reading of an
+    /// accumulator is not a rate.
+    pub package_watts: f32,
     pub zone_count: u32,
     pub zones: [f32; MAX_ZONES],
     /// Zone labels, NUL padded, one per zone.
@@ -108,6 +114,7 @@ impl Default for SharedTemperature {
             sequence: 0,
             timestamp_ms: 0,
             package_c: f32::NAN,
+            package_watts: f32::NAN,
             zone_count: 0,
             zones: [f32::NAN; MAX_ZONES],
             zone_labels: [[0u8; 8]; MAX_ZONES],
@@ -116,6 +123,15 @@ impl Default for SharedTemperature {
 }
 
 impl SharedTemperature {
+    /// Package power, if there is a real one.
+    pub fn watts(&self) -> Option<f32> {
+        if self.package_watts.is_nan() {
+            None
+        } else {
+            Some(self.package_watts)
+        }
+    }
+
     /// Package temperature, if there is a real one.
     pub fn package(&self) -> Option<f32> {
         if self.package_c.is_nan() {
