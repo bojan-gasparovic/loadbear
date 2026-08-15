@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "note": "Limits and vendor guarantees only. Never expected or normal temperatures, which are not published by any vendor and are not chassis-independent. Chassis and airflow account for roughly 8 to 10 degrees C of variance on identical silicon and ambient for a further 5 to 10, so any per-CPU normal range narrower than about 20 degrees is fabricated.",
   "entries": [
     {
@@ -15,7 +15,8 @@
       "ctdp_max_watts": 25,
       "tjmax_c": 105.0,
       "cores": 8,
-      "threads": 16
+      "threads": 16,
+      "source": "UNVERIFIED. Added 2026-08-14 without a recorded source. Check against the vendor product page before relying on it."
     },
     {
       "vendor": "Intel",
@@ -30,7 +31,8 @@
       "ctdp_max_watts": 28,
       "tjmax_c": 100.0,
       "cores": 4,
-      "threads": 8
+      "threads": 8,
+      "source": "UNVERIFIED. Added 2026-08-14 without a recorded source. Check against the vendor product page before relying on it."
     },
     {
       "vendor": "Amd",
@@ -45,7 +47,9 @@
       "ctdp_max_watts": null,
       "tjmax_c": 90.0,
       "cores": 8,
-      "threads": 16
+      "threads": 16,
+      "source": "UNVERIFIED. Added 2026-08-14 without a recorded source. Check against the vendor product page before relying on it."
     }
-  ]
+  ],
+  "how_to_add": "Every figure must come from the vendor's own product page, and the source belongs in the entry. CPUID does not identify a product: family 23 model 96 is Renoir and the whole Ryzen 4000U line shares it, so check which other models share the family and model before adding one, and give every sibling its own entry. Stepping is recorded but never matched, because no vendor publishes different figures for a silicon revision. Two entries sharing a family, model and thread count cannot be told apart and will be merged into the weakest claim of the two; that is safe but it costs precision, so do it knowingly."
 }

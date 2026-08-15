@@ -53,6 +53,15 @@ pub struct CpuSpec {
     pub tjmax_c: Option<f32>,
     pub cores: u8,
     pub threads: u8,
+    /// Where these figures came from.
+    ///
+    /// Required, and not decorative. `base_mhz` is the only contractual number
+    /// in the product and a wrong one produces a permanent, plausible looking
+    /// verdict on a healthy machine, which is the hardest kind of error to
+    /// notice. An entry that cannot say where its figures came from cannot be
+    /// checked by anybody later.
+    #[serde(default)]
+    pub source: String,
 }
 
 impl CpuSpec {
@@ -188,7 +197,17 @@ impl SpecDb {
     /// made everywhere else here: never a confident wrong answer, occasionally
     /// a missed one.
     pub fn resolve(&self, key: &CpuKey, threads: u8) -> Option<SpecMatch> {
-        let by_key: Vec<&CpuSpec> = self.entries.iter().filter(|s| s.key() == *key).collect();
+        // Stepping is deliberately not matched. It is a silicon revision, and
+        // no vendor publishes different base clocks, TDPs or junction limits
+        // for one. Requiring it means an entry written from a machine with
+        // stepping 1 silently fails to match the same product at stepping 0 or
+        // 2, and the failure looks exactly like an unknown processor: every
+        // published check quietly disabled, with nothing saying why.
+        let by_key: Vec<&CpuSpec> = self
+            .entries
+            .iter()
+            .filter(|s| s.vendor == key.vendor && s.family == key.family && s.model == key.model)
+            .collect();
         if by_key.is_empty() {
             return None;
         }
@@ -291,6 +310,7 @@ mod resolve_tests {
             tjmax_c: Some(105.0),
             cores,
             threads,
+            source: "test fixture".to_string(),
         }
     }
 
@@ -382,6 +402,23 @@ mod resolve_tests {
     }
 
     #[test]
+    fn a_different_silicon_revision_still_resolves() {
+        // Steppings vary across a production run and vendors publish one set
+        // of figures for the product regardless. Matching on it turns a known
+        // processor into an unknown one for no reason.
+        let other_stepping = CpuKey {
+            vendor: Vendor::Amd,
+            family: 23,
+            model: 96,
+            stepping: 0,
+        };
+        let m = line()
+            .resolve(&other_stepping, 8)
+            .expect("a stepping the database has never seen must still resolve");
+        assert_eq!(m.label(), "AMD Ryzen 7 4700U");
+    }
+
+    #[test]
     fn an_unknown_processor_resolves_to_nothing() {
         let unknown = CpuKey {
             vendor: Vendor::Amd,
@@ -409,6 +446,75 @@ mod resolve_tests {
                 e.name
             );
             seen.push(id);
+        }
+    }
+}
+
+#[cfg(test)]
+mod data_tests {
+    use super::*;
+
+    /// Guards on the shipped data rather than the code.
+    ///
+    /// These catch the class of mistake that is otherwise invisible: a figure
+    /// typed wrongly reads as a perfectly ordinary processor until somebody
+    /// with that chip sees a verdict fire forever on a healthy machine.
+    #[test]
+    fn every_entry_records_where_its_figures_came_from() {
+        for e in &SpecDb::embedded().unwrap().entries {
+            assert!(
+                !e.source.trim().is_empty(),
+                "{} has no source. Every figure must be traceable to the vendor.",
+                e.name
+            );
+        }
+    }
+
+    #[test]
+    fn every_published_figure_is_physically_plausible() {
+        for e in &SpecDb::embedded().unwrap().entries {
+            assert!(
+                (400..=6000).contains(&e.base_mhz),
+                "{} has a base clock of {} MHz",
+                e.name,
+                e.base_mhz
+            );
+            if let Some(boost) = e.boost_mhz {
+                assert!(
+                    boost >= e.base_mhz,
+                    "{} boosts to {boost} below its {} MHz base",
+                    e.name,
+                    e.base_mhz
+                );
+            }
+            assert!(
+                (1..=400).contains(&e.tdp_watts),
+                "{} has a TDP of {} W",
+                e.name,
+                e.tdp_watts
+            );
+            if let (Some(lo), Some(hi)) = (e.ctdp_min_watts, e.ctdp_max_watts) {
+                assert!(
+                    lo <= hi,
+                    "{} has a configurable band of {lo} to {hi} W",
+                    e.name
+                );
+            }
+            if let Some(t) = e.tjmax_c {
+                assert!(
+                    (60.0..=120.0).contains(&t),
+                    "{} has a junction limit of {t} C",
+                    e.name
+                );
+            }
+            assert!(e.cores >= 1, "{} has no cores", e.name);
+            assert!(
+                e.threads >= e.cores,
+                "{} has {} threads across {} cores",
+                e.name,
+                e.threads,
+                e.cores
+            );
         }
     }
 }

@@ -254,6 +254,7 @@ mod tests {
             tjmax_c: Some(105.0),
             cores: 8,
             threads: 16,
+            source: "test fixture".to_string(),
         }
     }
 
