@@ -19,7 +19,7 @@ pub mod verdict;
 pub use attribution::{attribute, diagnose, group_by_name, ProcessGroup};
 pub use contract::{Cause, CauseKind, Finding, NotificationGate, Remediation};
 pub use spec::{CpuKey, CpuSpec, SpecDb, SpecError, Vendor};
-pub use tier::{classify, Tier};
+pub use tier::{classify, Assessment, Tier, TierReason, TierTracker};
 pub use types::{
     ContainerReading, CpuReading, ProcessReading, Reading, Resource, StallSignal, ThrottleReason,
     ThrottleState,

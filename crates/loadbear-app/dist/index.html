@@ -23,7 +23,15 @@
     -webkit-font-smoothing: antialiased;
     user-select: none; cursor: default;
   }
-  #app { height: 100%; padding: 20px 22px 22px; display: flex; flex-direction: column; }
+  /* Scrolls as one column rather than being a fixed frame with a single
+     scrolling region inside it. The previous arrangement gave every section
+     `flex: none` and let one of them absorb the slack, so adding a section
+     silently pushed the temperature panel below the fold where `overflow:
+     hidden` made it unreachable. */
+  #app { height: 100%; padding: 20px 22px 22px; overflow-y: auto; overflow-x: hidden; }
+  #app::-webkit-scrollbar { width: 8px; }
+  #app::-webkit-scrollbar-thumb { background: #2c3038; border-radius: 4px; }
+  #app::-webkit-scrollbar-track { background: transparent; }
 
   header { flex: none; display: flex; align-items: center; gap: 14px; margin-bottom: 4px; }
   #bear { width: 52px; height: 52px; flex: none; opacity: .95; }
@@ -52,10 +60,26 @@
 
   h2 { font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--faint);
        margin: 20px 0 9px; font-weight: 600; flex: none; }
-  #verdicts { flex: 1 1 auto; min-height: 64px; overflow-y: auto; overflow-x: hidden; }
-  #verdicts::-webkit-scrollbar { width: 8px; }
-  #verdicts::-webkit-scrollbar-thumb { background: #2c3038; border-radius: 4px; }
-  #verdicts::-webkit-scrollbar-track { background: transparent; }
+  #verdicts { flex: none; }
+
+  /* The reason the tier is what it is. Always present, because a colour with
+     no explanation is an assertion the user cannot check. */
+  #why { margin-top: 12px; padding: 11px 13px; background: var(--panel);
+         border: 1px solid var(--line); border-radius: 8px;
+         font-size: 12.5px; color: var(--dim); line-height: 1.5; }
+
+  /* The last few minutes. Drawn from the per tick sample, not from the
+     smoothed one, so spikes are visible next to a tier that ignored them. */
+  .graph { margin-top: 14px; }
+  .graph svg { width: 100%; height: 54px; display: block;
+               background: var(--panel); border: 1px solid var(--line);
+               border-radius: 8px 8px 0 0; }
+  .graph .strip { display: flex; height: 4px; gap: 0;
+                  border: 1px solid var(--line); border-top: 0;
+                  border-radius: 0 0 8px 8px; overflow: hidden; background: var(--panel); }
+  .graph .strip i { flex: 1 1 0; }
+  .graph .cap { display: flex; justify-content: space-between;
+                font-size: 10.5px; color: var(--faint); margin-top: 5px; }
 
   .verdict { border-left: 2px solid var(--strained); background: var(--panel);
              border-radius: 0 6px 6px 0; padding: 10px 13px; margin-bottom: 9px; }
@@ -128,11 +152,24 @@
     <div class="bar" id="bar-io"><div class="lab"><span>io</span><span class="pct">0%</span></div><div class="track"><div class="fill"></div></div></div>
   </div>
 
-  <h2>Findings</h2>
-  <div id="verdicts"><div class="quiet">Nothing to report.</div></div>
+  <div class="graph">
+    <svg id="chart" viewBox="0 0 200 100" preserveAspectRatio="none" aria-hidden="true"></svg>
+    <div class="strip" id="strip"></div>
+    <div class="cap">
+      <span>five minutes ago</span>
+      <span><b style="color:#5b7fa3">&#9473;</b> utilization &nbsp; <b style="color:#cf5a4e">&#9473;</b> worst stall &nbsp; strip: tier</span>
+      <span>now</span>
+    </div>
+  </div>
 
-  <h2>Running <span class="hint" id="running-hint"></span></h2>
-  <div class="plist" id="top"></div>
+  <h2>Findings</h2>
+  <div id="why"></div>
+  <div id="verdicts"></div>
+
+  <div id="contributors-block" style="display:none">
+    <h2>Heaviest <span class="hint" id="contrib-hint"></span></h2>
+    <div class="plist" id="contributors"></div>
+  </div>
 
   <div id="containers-block" style="display:none">
     <h2>Containers</h2>
@@ -167,6 +204,38 @@ function bar(el, v) {
   el.classList.toggle('max', v >= 0.80);
 }
 
+const TIER_COLOR = ['#4ea87a', '#c9973f', '#cf5a4e'];
+
+/// Utilization as an area, with the worst stall drawn over it, and a strip
+/// underneath showing what the tier actually was at each tick.
+///
+/// The point of the strip is the comparison. A spike in the line with no
+/// matching colour in the strip is LoadBear visibly declining to call a burst
+/// a problem, which is the behaviour that has to be legible to be trusted.
+function drawGraph(history) {
+  const svg = $('chart'), strip = $('strip');
+  if (!history || history.length < 2) {
+    svg.innerHTML = '<text x="100" y="55" fill="#6b717b" font-size="9" text-anchor="middle">collecting</text>';
+    strip.innerHTML = '';
+    return;
+  }
+
+  const n = history.length;
+  const x = i => (i / (n - 1)) * 200;
+  const y = v => 100 - Math.max(0, Math.min(1, v)) * 96 - 2;
+
+  const line = key => history.map((h, i) => `${x(i).toFixed(2)},${y(key(h)).toFixed(2)}`).join(' ');
+  const util = line(h => h.utilization / 100);
+  const stall = line(h => Math.max(h.cpu, h.memory, h.io));
+
+  svg.innerHTML = `
+    <polygon points="0,100 ${util} 200,100" fill="#2a3f52" opacity=".55" />
+    <polyline points="${util}" fill="none" stroke="#5b7fa3" stroke-width="1" vector-effect="non-scaling-stroke" />
+    <polyline points="${stall}" fill="none" stroke="#cf5a4e" stroke-width="1" stroke-opacity=".85" vector-effect="non-scaling-stroke" />`;
+
+  strip.innerHTML = history.map(h => `<i style="background:${TIER_COLOR[h.tier] || TIER_COLOR[0]}"></i>`).join('');
+}
+
 function render(s) {
   const tier = s.tier.toLowerCase();
   $('tier').textContent = s.tier;
@@ -190,9 +259,12 @@ function render(s) {
   bar($('bar-mem'), s.stall_memory);
   bar($('bar-io'), s.stall_io);
 
+  drawGraph(s.history);
+  $('why').textContent = s.reason;
+
   const v = $('verdicts');
   if (!s.verdicts.length) {
-    v.innerHTML = '<div class="quiet">Nothing to report.</div>';
+    v.innerHTML = '';
   } else {
     v.innerHTML = s.verdicts.map(x => `
       <div class="verdict ${x.severity === 'Degraded' ? 'degraded' : ''}">
@@ -206,17 +278,16 @@ function render(s) {
       </div>`).join('');
   }
 
-  const top = $('top');
-  if (!s.top.length) {
-    top.innerHTML = '<div class="quiet">Reading processes...</div>';
-    $('running-hint').textContent = '';
+  // Shown only when something is actually under pressure. A list of what is
+  // running, reordering itself every second, is Task Manager.
+  const cblock = $('contributors-block');
+  if (!s.contributors.length) {
+    cblock.style.display = 'none';
   } else {
-    // Listed for comparison against the findings above. Something appearing
-    // here has not been blamed for anything; a cause is only named when the
-    // evidence clears the bar.
-    $('running-hint').textContent = `heaviest of ${s.logical} logical processors`;
-    top.innerHTML = '<div class="p head"><div class="pn">process</div><div class="pv">cpu</div><div class="pv">memory</div></div>'
-      + s.top.map(([name, cpu, mb]) => `
+    cblock.style.display = 'block';
+    $('contrib-hint').textContent = 'ranked by the resource above';
+    $('contributors').innerHTML = '<div class="p head"><div class="pn">process</div><div class="pv">cpu</div><div class="pv">memory</div></div>'
+      + s.contributors.map(([name, cpu, mb]) => `
         <div class="p">
           <div class="pn">${esc(name)}</div>
           <div class="pv">${cpu.toFixed(1)}%</div>

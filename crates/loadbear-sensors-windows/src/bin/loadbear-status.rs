@@ -78,7 +78,10 @@ fn main() {
         };
 
         let verdicts = evaluate(&reading, spec);
-        let tier = classify(&verdicts, &reading.stall);
+        // The instantaneous judgement, not the sustained one. This tool exists
+        // to watch the engine react tick by tick, which is exactly the view the
+        // application deliberately does not show.
+        let tier = classify(&verdicts, &reading.stall).tier;
 
         if watch {
             print!("\x1B[2J\x1B[H");

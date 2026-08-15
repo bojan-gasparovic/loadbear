@@ -185,18 +185,28 @@ impl Drop for Counters {
 /// How many samples the rolling window holds.
 ///
 /// At the application's sampling interval of 1.5 seconds this covers roughly
-/// six seconds. It is long enough to flatten the run queue, which swings
-/// between 0 and 30 from one second to the next on a machine under load, and
-/// short enough that the interface still tracks what the user is doing.
-pub const WINDOW_SAMPLES: usize = 4;
+/// twelve seconds, which is long enough for a majority of samples to disagree
+/// with a burst.
+pub const WINDOW_SAMPLES: usize = 8;
 
-/// A rolling window of samples, averaged.
+/// A rolling window of samples, reducible by mean or by median.
 ///
-/// Every counter LoadBear reads is spiky, and one of them, the run queue, is
-/// spiky enough that a single reading carries almost no information. The engine
-/// already reasons in sustained terms; this is the sensor layer doing the same
-/// so that a verdict is never decided by whichever instant it happened to land
-/// on.
+/// # Why the median exists, measured 2026-08-15
+///
+/// Forty consecutive samples of this machine during ordinary work: the run
+/// queue read `0.0` on thirty-nine of them and `31.0` on one. It is not a noisy
+/// continuous signal, it is a binary spike, and the mean handles that badly.
+/// Averaging one spike of 31 across four samples reports a queue of 7.5 for six
+/// seconds, so a half-second event becomes six seconds of visible strain. The
+/// mean does not suppress a spike, it spreads it.
+///
+/// The median discards it outright. Thirty-nine zeroes and one spike has a
+/// median of zero, which is the truthful answer to "is this machine loaded".
+/// A machine genuinely under load has a majority of loaded samples and the
+/// median follows it up.
+///
+/// So judgement uses [`Self::median`] and display uses [`Self::average`], which
+/// still moves smoothly enough to watch.
 #[derive(Debug, Clone)]
 pub struct SampleWindow {
     capacity: usize,
@@ -226,13 +236,50 @@ impl SampleWindow {
         self.samples.is_empty()
     }
 
-    /// Whether the window has filled, so its average covers the full period.
+    /// Whether the window has filled, so its reductions cover the full period.
     ///
-    /// A partial average is still worth showing, which is why [`Self::average`]
-    /// does not wait for this. It is reported separately so a caller that wants
-    /// to claim something is *sustained* can tell the difference.
+    /// A partial window is still worth showing, which is why neither reduction
+    /// waits for this. It is reported separately so a caller that wants to
+    /// claim something is *sustained* can tell the difference.
     pub fn is_settled(&self) -> bool {
         self.samples.len() == self.capacity
+    }
+
+    /// The median of every sample held, field by field.
+    ///
+    /// The statistic judgement uses. A single spike cannot move a median, which
+    /// is the entire point: on this machine the run queue is zero on thirty
+    /// nine samples out of forty, and the fortieth should not be allowed to
+    /// describe the machine.
+    ///
+    /// Each field is taken independently, so the result is not any one sample
+    /// that was actually observed. That is correct here. The question asked of
+    /// it is "what is this machine typically doing", one resource at a time,
+    /// not "which instant was representative".
+    pub fn median(&self) -> Option<CounterSample> {
+        if self.samples.is_empty() {
+            return None;
+        }
+        let pick = |f: fn(&CounterSample) -> f64| -> f64 {
+            let mut values: Vec<f64> = self.samples.iter().map(f).collect();
+            values.sort_by(f64::total_cmp);
+            let mid = values.len() / 2;
+            if values.len() % 2 == 0 {
+                (values[mid - 1] + values[mid]) / 2.0
+            } else {
+                values[mid]
+            }
+        };
+        Some(CounterSample {
+            processor_performance_pct: pick(|s| s.processor_performance_pct),
+            processor_frequency_mhz: pick(|s| s.processor_frequency_mhz),
+            processor_time_pct: pick(|s| s.processor_time_pct),
+            processor_queue_length: pick(|s| s.processor_queue_length),
+            pages_input_per_sec: pick(|s| s.pages_input_per_sec),
+            available_mbytes: pick(|s| s.available_mbytes),
+            disk_seconds_per_transfer: pick(|s| s.disk_seconds_per_transfer),
+            disk_queue_length: pick(|s| s.disk_queue_length),
+        })
     }
 
     /// The mean of every sample held, or `None` when nothing has been pushed.
@@ -284,8 +331,25 @@ impl Default for SampleWindow {
 /// calibrated against real machines under real load.
 pub mod scale {
     /// Hard faults per second at which memory stall is treated as saturated.
-    pub const PAGES_INPUT_SATURATED: f64 = 1000.0;
+    ///
+    /// **Raised from 1000 on 2026-08-15 against measurement.** Forty samples of
+    /// ordinary work on this machine, no perceptible slowness, produced bursts
+    /// of 5641 and 12513 hard faults per second from what was plainly just
+    /// reading files. At the old figure those two samples pinned memory stall
+    /// to fully saturated, which drove the tier to Strained and turned the tray
+    /// icon red during nothing at all.
+    ///
+    /// A machine that is genuinely thrashing sustains a rate like this rather
+    /// than touching it twice a minute, and the median window is what tells the
+    /// two apart. This figure sits above the measured ordinary peak so that
+    /// even the median of a busy period is not saturated by routine file
+    /// access. It still wants calibrating against a machine that is actually
+    /// paging itself to death, which this one was not.
+    pub const PAGES_INPUT_SATURATED: f64 = 20_000.0;
     /// Seconds per disk transfer at which I/O stall is treated as saturated.
+    ///
+    /// Measured range during ordinary work on this machine was 0.0002 to
+    /// 0.0013, comfortably clear of this, so it is left where it was.
     pub const DISK_LATENCY_SATURATED: f64 = 0.050;
 }
 
@@ -406,6 +470,62 @@ mod tests {
             "a spike must age out of the window rather than colouring it forever"
         );
         assert!(w.is_settled());
+    }
+
+    #[test]
+    fn the_median_discards_a_lone_spike_entirely() {
+        // The measured shape of this machine: the run queue reads zero on
+        // thirty nine samples out of forty and spikes once. The mean turns
+        // that one spike into six seconds of visible strain. The median treats
+        // it as what it is.
+        let mut w = SampleWindow::new(8);
+        for _ in 0..7 {
+            w.push(sample_with_queue(0.0));
+        }
+        w.push(sample_with_queue(31.0));
+        assert_eq!(w.median().unwrap().processor_queue_length, 0.0);
+        assert!(
+            w.average().unwrap().processor_queue_length > 3.0,
+            "the mean is shown to have the problem the median solves"
+        );
+    }
+
+    #[test]
+    fn the_median_follows_a_machine_that_is_actually_loaded() {
+        // The other half. A statistic that only ever reports calm is useless.
+        let mut w = SampleWindow::new(8);
+        for _ in 0..6 {
+            w.push(sample_with_queue(24.0));
+        }
+        w.push(sample_with_queue(0.0));
+        w.push(sample_with_queue(0.0));
+        assert_eq!(w.median().unwrap().processor_queue_length, 24.0);
+        assert_eq!(to_stall(&w.median().unwrap(), 16).cpu, 1.0);
+    }
+
+    #[test]
+    fn ordinary_file_reading_no_longer_saturates_memory_stall() {
+        // The measured burst that used to turn the tray icon red during
+        // nothing at all.
+        let s = CounterSample {
+            pages_input_per_sec: 12_513.0,
+            ..Default::default()
+        };
+        let stall = to_stall(&s, 16);
+        assert!(
+            stall.memory < 0.80,
+            "a routine burst of file reading must not reach the out of spec threshold, got {}",
+            stall.memory
+        );
+    }
+
+    #[test]
+    fn a_machine_genuinely_paging_still_saturates() {
+        let s = CounterSample {
+            pages_input_per_sec: 40_000.0,
+            ..Default::default()
+        };
+        assert_eq!(to_stall(&s, 16).memory, 1.0);
     }
 
     #[test]

@@ -10,13 +10,14 @@
 //! transitions have been watched firing on a real machine over normal work,
 //! because that is the only way to write an honest brief for an illustrator.
 
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use loadbear_core::{
-    classify, diagnose, evaluate, ContainerReading, CpuReading, Reading, SpecDb, ThrottleState,
-    Tier,
+    classify, diagnose, evaluate, Assessment, ContainerReading, CpuReading, Reading, Resource,
+    SpecDb, ThrottleState, Tier, TierReason, TierTracker, VerdictKind,
 };
 use loadbear_sensors_windows::counters::{to_stall, Counters, SampleWindow};
 use loadbear_sensors_windows::cpuid::{brand_string, current_cpu_key};
@@ -49,6 +50,23 @@ struct VerdictView {
     action: Option<String>,
 }
 
+/// One tick of the graph.
+///
+/// Kept per tick rather than reduced, because the graph exists to show the real
+/// shape of the last few minutes. The tier is drawn against it so that a spike
+/// which did not move the tier is visibly a spike that did not move the tier.
+#[derive(Debug, Clone, Copy, Serialize)]
+struct HistoryPoint {
+    utilization: f32,
+    cpu: f32,
+    memory: f32,
+    io: f32,
+    tier: u8,
+}
+
+/// Roughly five minutes at the sampling interval.
+const HISTORY_POINTS: usize = 200;
+
 /// A container as the interface shows it.
 #[derive(Debug, Clone, Serialize)]
 struct ContainerView {
@@ -79,8 +97,20 @@ struct Status {
     stall_memory: f32,
     stall_io: f32,
     verdicts: Vec<VerdictView>,
-    /// The heaviest few processes, for the panel that shows what is running.
-    top: Vec<(String, f32, f64)>,
+    /// Why the tier is what it is, in one sentence, always populated.
+    ///
+    /// The tier can be driven by the stall signal, which produces no verdict at
+    /// all, so a red icon with an empty findings list was a reachable and
+    /// completely unexplained state. This is the sentence that fixes it.
+    reason: String,
+    /// The last few minutes, per tick.
+    history: Vec<HistoryPoint>,
+    /// The heaviest processes on the resource that drove the tier.
+    ///
+    /// Empty while the machine is fine. A list of what is running is Task
+    /// Manager and helps nobody; the same list shown because a specific
+    /// resource is under pressure is an explanation.
+    contributors: Vec<(String, f32, f64)>,
     containers: Vec<ContainerView>,
     /// Whether a container runtime answered at all, which is different from
     /// answering that nothing is running.
@@ -117,7 +147,9 @@ impl Default for Status {
             stall_memory: 0.0,
             stall_io: 0.0,
             verdicts: vec![],
-            top: vec![],
+            reason: "Watching. Nothing has held long enough to judge yet.".into(),
+            history: vec![],
+            contributors: vec![],
             containers: vec![],
             docker_present: false,
             temp_available: false,
@@ -203,22 +235,67 @@ fn remediation_text(r: loadbear_core::Remediation) -> String {
     .to_string()
 }
 
-/// The heaviest few processes, by CPU then by memory.
+/// Why the tier is what it is, as a sentence.
 ///
-/// Shown so the user can see what LoadBear saw. This is not the attribution:
-/// the panel lists whatever is running, whereas a cause is only named when the
-/// evidence clears the bar in `loadbear_core::attribution`. A user comparing
-/// the two should be able to see why LoadBear declined to name anything.
-fn top_processes(reading: &Reading) -> Vec<(String, f32, f64)> {
+/// Always says something. A tier with no explanation behind it is an assertion,
+/// and an assertion the user cannot check is one they stop believing.
+fn reason_text(assessment: Assessment, settled: bool) -> String {
+    match assessment.reason {
+        TierReason::Clear if !settled => {
+            "Watching. Nothing has held long enough to judge yet.".to_string()
+        }
+        TierReason::Clear => "Running within spec, with headroom.".to_string(),
+        TierReason::Verdict(kind) => format!(
+            "{} has held for at least {} seconds. See the finding below.",
+            match kind {
+                VerdictKind::BelowBaseClock => "A clock below the guaranteed base",
+                VerdictKind::Throttling => "A hardware throttle signal",
+                VerdictKind::PowerOutsideBand => "Package power outside its band",
+                VerdictKind::ThermalHeadroomLow => "Low thermal headroom",
+            },
+            loadbear_core::tier::ESCALATE_MS / 1000
+        ),
+        TierReason::Stall(resource) => format!(
+            "No published limit has been crossed. {} for at least {} seconds, which is measured rather than compared against a specification.",
+            match resource {
+                Resource::Cpu => "Work has been waiting for a processor",
+                Resource::Memory => "Work has been waiting on memory, which means hard page faults",
+                Resource::Io => "Work has been waiting on the disk",
+            },
+            loadbear_core::tier::ESCALATE_MS / 1000
+        ),
+    }
+}
+
+/// The heaviest processes on the resource that actually drove the tier.
+///
+/// Deliberately empty while the machine is fine. A list of what is running,
+/// refreshing every second and reordering itself, is Task Manager and tells
+/// nobody anything. The same list, shown because a named resource is under
+/// pressure and ranked by that resource, is an explanation of the tier.
+///
+/// This is not the attribution. A cause is only *named* when the evidence
+/// clears the bar in `loadbear_core::attribution`, and this list appears
+/// whether or not it did, so the user can see what LoadBear was looking at when
+/// it declined to name anything.
+fn contributors(reading: &Reading, assessment: Assessment) -> Vec<(String, f32, f64)> {
+    let resource = match assessment.reason {
+        TierReason::Clear => return Vec::new(),
+        TierReason::Stall(r) => r,
+        // A verdict is about the processor, so rank by what is demanding it.
+        TierReason::Verdict(_) => Resource::Cpu,
+    };
+
     let mut groups = loadbear_core::group_by_name(&reading.processes);
-    groups.sort_by(|a, b| {
-        b.cpu_percent
-            .total_cmp(&a.cpu_percent)
-            .then(b.working_set_bytes.cmp(&a.working_set_bytes))
-    });
+    match resource {
+        Resource::Cpu => groups.sort_by(|a, b| b.cpu_percent.total_cmp(&a.cpu_percent)),
+        Resource::Memory | Resource::Io => {
+            groups.sort_by_key(|g| std::cmp::Reverse(g.working_set_bytes))
+        }
+    }
     groups
         .iter()
-        .take(6)
+        .take(5)
         .map(|g| {
             (
                 g.label(),
@@ -303,11 +380,16 @@ fn main() {
 
                 let mut last_tier = Tier::Easy;
 
-                // Every counter LoadBear reads is spiky and the run queue is
-                // extremely so. Verdicts are decided on the averaged sample,
-                // never on whichever instant the loop happened to land on.
+                // Two reductions of the same window, for two different jobs.
+                // Judgement uses the median, which a lone spike cannot move.
+                // Display uses the mean, which moves smoothly enough to watch.
                 let mut window = SampleWindow::default();
                 let mut process_sampler = ProcessSampler::new(logical);
+
+                // The sustained requirement that `Strained` has always claimed
+                // in its documentation and never enforced.
+                let mut tracker = TierTracker::default();
+                let mut history: VecDeque<HistoryPoint> = VecDeque::new();
 
                 loop {
                     let Ok(raw) = counters.sample(SAMPLE_INTERVAL) else {
@@ -315,6 +397,7 @@ fn main() {
                     };
                     window.push(raw);
                     let sample = window.average().unwrap_or(raw);
+                    let judged = window.median().unwrap_or(raw);
 
                     if REPROBE.swap(false, Ordering::Relaxed) || reader.is_none() {
                         reader = TemperatureReader::open().ok();
@@ -363,12 +446,13 @@ fn main() {
                         ),
                     };
 
+                    let now = now_ms();
                     let reading = Reading {
-                        timestamp_ms: 0,
-                        stall: to_stall(&sample, logical),
+                        timestamp_ms: now,
+                        stall: to_stall(&judged, logical),
                         cpu: CpuReading {
-                            all_core_mhz: sample.actual_mhz(),
-                            utilization_pct: Some(sample.processor_time_pct as f32),
+                            all_core_mhz: judged.actual_mhz(),
+                            utilization_pct: Some(judged.processor_time_pct as f32),
                             package_watts: None,
                             package_temp_c: published.as_ref().and_then(|s| s.package()),
                             tjmax_c: spec.as_ref().and_then(|s| s.tjmax_c),
@@ -377,19 +461,36 @@ fn main() {
                                 reason: None,
                             },
                         },
-                        processes: process_sampler.sample(now_ms()),
-                        containers: containers
-                            .lock()
-                            .map(|c| c.clone())
-                            .unwrap_or_default(),
+                        processes: process_sampler.sample(now),
+                        containers: containers.lock().map(|c| c.clone()).unwrap_or_default(),
                     };
 
                     let verdicts = evaluate(&reading, spec.as_ref());
-                    let tier = classify(&verdicts, &reading.stall);
+                    // Two steps, deliberately separate. `classify` judges this
+                    // window; the tracker decides whether that has held long
+                    // enough to be worth showing anybody.
+                    let assessment = tracker.observe(classify(&verdicts, &reading.stall), now);
+                    let tier = assessment.tier;
                     // Attribution runs over the same reading the verdicts came
                     // from, so a finding can never name a cause measured at a
                     // different moment from the state it explains.
                     let findings = diagnose(&reading, verdicts);
+
+                    // The graph. Recorded from the per tick sample rather than
+                    // either reduction, because the point of it is to show the
+                    // real shape of the last few minutes, spikes included, next
+                    // to a tier that deliberately ignores them.
+                    let displayed = to_stall(&sample, logical);
+                    history.push_back(HistoryPoint {
+                        utilization: raw.processor_time_pct as f32,
+                        cpu: displayed.cpu,
+                        memory: displayed.memory,
+                        io: displayed.io,
+                        tier: tier as u8,
+                    });
+                    while history.len() > HISTORY_POINTS {
+                        history.pop_front();
+                    }
 
                     if tier != last_tier {
                         if let Some(icon) = tray_icon(tier) {
@@ -430,7 +531,9 @@ fn main() {
                                     action: f.remediation.map(remediation_text),
                                 })
                                 .collect(),
-                            top: top_processes(&reading),
+                            reason: reason_text(assessment, window.is_settled()),
+                            history: history.iter().copied().collect(),
+                            contributors: contributors(&reading, assessment),
                             containers: reading
                                 .containers
                                 .iter()
