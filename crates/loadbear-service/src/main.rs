@@ -138,8 +138,13 @@ fn probe_power() -> i32 {
     println!("first reading is absent by design: power is a difference, not a level");
     println!();
 
+    // Two orderings in one run. The helper reads temperature first and then
+    // power, and publishes NaN watts; this probe read only power and got 10 W.
+    // That is the sole difference between them, so it is the thing to test.
     let mut seen = 0;
-    for i in 0..12 {
+
+    println!("A: power only");
+    for i in 0..4 {
         let now = now_ms();
         match temp.package_watts(now) {
             Some(w) => {
@@ -147,6 +152,21 @@ fn probe_power() -> i32 {
                 seen += 1;
             }
             None => println!("  {i:>2}        -"),
+        }
+        std::thread::sleep(Duration::from_millis(1000));
+    }
+
+    println!();
+    println!("B: temperature first, then power, exactly as the helper does");
+    for i in 0..6 {
+        let now = now_ms();
+        let t = temp.read();
+        match temp.package_watts(now) {
+            Some(w) => {
+                println!("  {i:>2}  {w:>7.2} W   (temp {:?})", t.package_c);
+                seen += 1;
+            }
+            None => println!("  {i:>2}        -     (temp {:?})", t.package_c),
         }
         std::thread::sleep(Duration::from_millis(1000));
     }
