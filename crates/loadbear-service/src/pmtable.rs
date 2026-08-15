@@ -20,18 +20,12 @@ use loadbear_sensors_windows::pawnio::PawnIo;
 const MODULE_RYZEN_SMU: &[u8] =
     include_bytes!("../../loadbear-sensors-windows/modules/RyzenSMU.bin");
 
-/// Ranges worth printing, with what a value in each might be.
+/// How many snapshots to take, and how far apart.
 ///
-/// The first pass of this tool printed only 20 to 110, because it was hunting
-/// core temperatures and found them. That window hides package power, which on
-/// a 15 W part reads in single digits, so the table was dumped once and the
-/// power figures were never in the output.
-const BANDS: [(&str, f32, f32); 4] = [
-    ("power W", 0.5, 65.0),
-    ("temp C", 20.0, 110.0),
-    ("volts", 0.4, 1.6),
-    ("clock MHz", 400.0, 5200.0),
-];
+/// A limit and a measurement look identical in one snapshot. What separates
+/// them is that one moves. This is the whole reason the mode exists.
+const SAMPLES: usize = 10;
+const INTERVAL_MS: u64 = 1200;
 
 pub fn dump() -> i32 {
     let pawn = match PawnIo::open() {
@@ -69,48 +63,84 @@ pub fn dump() -> i32 {
         resolved.get(1).copied().unwrap_or(0)
     );
 
-    if let Err(e) = pawn.execute("ioctl_update_pm_table", &[], 0) {
-        println!("could not refresh the PM table: {e}");
-    }
-
-    // The table length is not reported, so ask for a generous window and take
-    // whatever comes back.
-    let words = match pawn.execute("ioctl_read_pm_table", &[], 1024) {
-        Ok(v) => v,
-        Err(e) => {
-            println!("could not read the PM table: {e}");
-            return 1;
-        }
-    };
-    println!("read back    : {} words", words.len());
+    // Take several snapshots rather than one. In a single dump a hard limit
+    // and a live measurement are indistinguishable: both are just a float in a
+    // plausible range. Across snapshots one holds still and the other does not,
+    // which is the only evidence available for telling them apart.
+    println!("sampling {SAMPLES} times, {INTERVAL_MS} ms apart. Load the machine now.");
     println!();
 
-    // Each 64-bit word carries two 32-bit floats. Print only those in a range
-    // that could be a temperature, with their index, so they can be correlated
-    // against a known-good reading.
-    // Printed per band rather than in one list, so a value can be recognised
-    // by what it plausibly is rather than only by where it sits.
-    for (label, lo, hi) in BANDS {
-        println!("{label} shaped values ({lo} to {hi}), by float index:");
-        let mut shown = 0;
-        for (i, w) in words.iter().enumerate() {
-            for half in 0..2 {
-                let bits = (*w >> (32 * half)) as u32;
-                let f = f32::from_bits(bits);
-                if f.is_finite() && f >= lo && f <= hi {
-                    println!("  [{:4}]  {:10.3}", i * 2 + half, f);
-                    shown += 1;
-                }
-            }
+    let mut series: Vec<Vec<f32>> = Vec::new();
+    for _ in 0..SAMPLES {
+        if pawn.execute("ioctl_update_pm_table", &[], 0).is_err() {
+            println!("could not refresh the PM table");
+            return 1;
         }
-        if shown == 0 {
-            println!("  none.");
-        }
-        println!();
+        let Ok(words) = pawn.execute("ioctl_read_pm_table", &[], 1024) else {
+            println!("could not read the PM table");
+            return 1;
+        };
+        let floats: Vec<f32> = words
+            .iter()
+            .flat_map(|w| [f32::from_bits(*w as u32), f32::from_bits((*w >> 32) as u32)])
+            .collect();
+        series.push(floats);
+        std::thread::sleep(std::time::Duration::from_millis(INTERVAL_MS));
     }
 
-    println!("Per-core temperatures are already known: indices 215 to 222 at table");
-    println!("version 0x370005. What is wanted now is package power, which should");
-    println!("track the wattage another tool reports and should move under load.");
+    let width = series.iter().map(|s| s.len()).min().unwrap_or(0);
+    println!("read back    : {width} floats per snapshot");
+    println!();
+
+    // Anything that never moved is a limit, a constant, or unused, and none of
+    // those are what is being looked for.
+    println!("power-shaped values that MOVED across the run:");
+    println!(
+        "  {:>5}  {:>9}  {:>9}  {:>9}  {:>7}",
+        "index", "min", "max", "last", "swing"
+    );
+    let mut found = 0;
+    for i in 0..width {
+        let vals: Vec<f32> = series.iter().map(|s| s[i]).collect();
+        if vals.iter().any(|v| !v.is_finite()) {
+            continue;
+        }
+        let min = vals.iter().copied().fold(f32::INFINITY, f32::min);
+        let max = vals.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        if !(0.2..=65.0).contains(&min) || max > 65.0 {
+            continue;
+        }
+        let swing = max - min;
+        // A measurement of a 15 W part swings by watts. Noise does not.
+        if swing < 0.75 {
+            continue;
+        }
+        println!(
+            "  {:>5}  {:>9.3}  {:>9.3}  {:>9.3}  {:>7.3}",
+            i,
+            min,
+            max,
+            vals[vals.len() - 1],
+            swing
+        );
+        found += 1;
+    }
+    if found == 0 {
+        println!("  none moved. Either the machine stayed idle or the table did not refresh.");
+    }
+    println!();
+
+    println!("the two leading candidates, whatever they did:");
+    for i in [0usize, 1] {
+        let vals: Vec<f32> = series.iter().map(|s| s[i]).collect();
+        let shown: Vec<String> = vals.iter().map(|v| format!("{v:.3}")).collect();
+        println!("  [{i:>3}]  {}", shown.join("  "));
+    }
+    println!();
+
+    println!("Package power is a single value that rises and falls with load and");
+    println!("sits in single digits to low tens of watts on this part. A value that");
+    println!("held still is a limit. Index 1 is expected to be it, with index 0 its");
+    println!("limit, but the movement is the evidence rather than the position.");
     0
 }
