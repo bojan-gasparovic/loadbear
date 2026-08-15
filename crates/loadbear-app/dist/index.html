@@ -163,8 +163,13 @@
   #zones { display: none; grid-template-columns: repeat(8, 1fr); gap: 4px; }
   #zones .z { background: var(--well); border: 1px solid transparent;
               border-radius: 5px; padding: 3px 2px; text-align: center; }
-  #zones .zl { font-size: 8.5px; color: var(--faint); letter-spacing: .04em; line-height: 1.2; }
-  #zones .zv { font-size: 14px; font-weight: 560; font-variant-numeric: tabular-nums; line-height: 1.2; }
+  #zones .zl { font-size: 7.5px; color: var(--faint); letter-spacing: .02em; line-height: 1.2;
+               white-space: nowrap; }
+  #zones .zv { font-size: 14px; font-weight: 560; font-variant-numeric: tabular-nums;
+               line-height: 1.2; white-space: nowrap; }
+  /* The unit rides small beside the number so the reading stays the thing the
+     eye lands on. */
+  #zones .zu { font-size: 8.5px; font-weight: 500; margin-left: 1px; opacity: .75; }
 
   /* Coloured by headroom below the vendor's published TjMax, never by an
      absolute scale. A band is chosen in `loadbear_core::thermal_band`, and a
@@ -385,8 +390,8 @@ function drawTemperature(s) {
       // absent band means the part publishes no limit, and the tile stays
       // uncoloured rather than being coloured against an invented range.
       return `<div class="z ${zone.band || ''}">`
-        + `<div class="zl">${esc(n)}</div>`
-        + `<div class="zv">${zone.celsius.toFixed(0)}</div></div>`;
+        + `<div class="zl">core #${esc(n)}</div>`
+        + `<div class="zv">${zone.celsius.toFixed(0)}<span class="zu">°C</span></div></div>`;
     }).join('');
   } else {
     z.style.display = 'none';
