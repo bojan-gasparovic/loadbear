@@ -132,6 +132,10 @@ struct Status {
     mhz: Option<u32>,
     logical: u32,
     utilization: f64,
+    /// Package power in watts, absent until the helper publishes one.
+    watts: Option<f32>,
+    /// The floor of the processor's configurable power band, for comparison.
+    ctdp_min_watts: u32,
     queue: f64,
     available_mb: f64,
     /// Installed physical memory, so the free figure means something.
@@ -183,6 +187,8 @@ impl Default for Status {
             mhz: None,
             logical: 1,
             utilization: 0.0,
+            watts: None,
+            ctdp_min_watts: 0,
             queue: 0.0,
             available_mb: 0.0,
             total_mb: 0.0,
@@ -664,6 +670,11 @@ fn main() {
                             mhz: reading.cpu.all_core_mhz,
                             logical,
                             utilization: sample.processor_time_pct,
+                            watts: reading.cpu.package_watts,
+                            ctdp_min_watts: spec
+                                .as_ref()
+                                .and_then(|s| s.ctdp_min_watts)
+                                .unwrap_or(0),
                             queue: sample.processor_queue_length,
                             available_mb: sample.available_mbytes,
                             total_mb,
