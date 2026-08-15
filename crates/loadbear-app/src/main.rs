@@ -172,7 +172,7 @@ impl Default for Status {
             stall_io: 0.0,
             verdicts: vec![],
             driver: String::new(),
-            reason: "Just started. Watching for a few seconds before saying anything.".into(),
+            reason: "Starting up.".into(),
             history: vec![],
             contributors: vec![],
             temp_available: false,
@@ -264,30 +264,23 @@ fn remediation_text(r: loadbear_core::Remediation) -> String {
 fn reason_text(assessment: Assessment, settled: bool) -> String {
     let seconds = loadbear_core::tier::ESCALATE_MS / 1000;
     match assessment.reason {
-        TierReason::Clear if !settled => {
-            "Just started. Watching for a few seconds before saying anything.".to_string()
-        }
-        TierReason::Clear => {
-            "Your machine is coping fine. Nothing is waiting for a resource.".to_string()
-        }
+        TierReason::Clear if !settled => "Starting up.".to_string(),
+        TierReason::Clear => "Nothing is waiting for a resource.".to_string(),
         TierReason::Verdict(kind) => format!(
-            "{} for over {seconds} seconds. Details below.",
+            "{} for over {seconds} seconds.",
             match kind {
-                VerdictKind::BelowBaseClock =>
-                    "Your processor has been running slower than the manufacturer promises",
-                VerdictKind::Throttling => "Your processor has been holding itself back",
-                VerdictKind::PowerOutsideBand => "Power draw has been outside its rated range",
-                VerdictKind::ThermalHeadroomLow =>
-                    "Your processor has been close to its temperature limit",
+                VerdictKind::BelowBaseClock => "Running slower than the manufacturer promises",
+                VerdictKind::Throttling => "The processor is holding itself back",
+                VerdictKind::PowerOutsideBand => "Power draw outside its rated range",
+                VerdictKind::ThermalHeadroomLow => "Close to the temperature limit",
             }
         ),
         TierReason::Stall(resource) => format!(
-            "{} for over {seconds} seconds. Nothing has exceeded a manufacturer limit, so this is measured directly rather than compared against a specification.",
+            "{} for over {seconds} seconds.",
             match resource {
-                Resource::Cpu => "Work has been queueing up waiting for a free processor",
-                Resource::Memory =>
-                    "Work has been stopping to fetch memory that had been pushed out to disk",
-                Resource::Io => "Work has been waiting on the disk to answer",
+                Resource::Cpu => "Work queueing for a free processor",
+                Resource::Memory => "Work stopping to fetch memory from disk",
+                Resource::Io => "Work waiting on the disk",
             }
         ),
     }

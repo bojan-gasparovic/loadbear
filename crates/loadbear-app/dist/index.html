@@ -70,7 +70,13 @@
          display: flex; align-items: center; }
 
   .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; overflow: hidden; min-height: 0; }
-  .col { display: flex; flex-direction: column; gap: 11px; overflow: hidden; min-height: 0; }
+  /* Explicit rows rather than flow, so a section that is empty still holds its
+     slot and nothing below it moves when it fills. */
+  .col-left { display: grid; grid-template-rows: auto auto auto 1fr; gap: 11px;
+              overflow: hidden; min-height: 0; }
+  .col-right { display: grid; grid-template-rows: auto 1fr 1fr; gap: 11px;
+               overflow: hidden; min-height: 0; }
+  .col-left > *, .col-right > * { min-height: 0; overflow: hidden; }
 
   #cpu { padding-bottom: 10px; border-bottom: 1px solid var(--line); }
   #brand { font-size: 12.5px; }
@@ -100,7 +106,6 @@
             font-variant-numeric: tabular-nums; }
   .st .sr { grid-column: 2 / 4; font-size: 10px; color: var(--hair);
             font-variant-numeric: tabular-nums; margin-top: -4px; }
-  .note { font-size: 10px; color: var(--hair); line-height: 1.4; }
 
   h2 { font-size: 9.5px; letter-spacing: .13em; text-transform: uppercase; color: var(--faint);
        margin: 0 0 6px; font-weight: 600; }
@@ -143,7 +148,8 @@
   /* Temperature lives in the header rather than in a panel of its own. Per
      core tiles and nothing else, in a single row: the package figure was the
      average of what these already say, so it cost a line to repeat them. */
-  #temp { text-align: right; }
+  #temp { text-align: right; min-height: 34px; display: flex;
+          flex-direction: column; justify-content: center; }
   /* Eight equal fractions of the half, so the row is the width of the graph
      below it whatever the window is. */
   #zones { display: none; grid-template-columns: repeat(8, 1fr); gap: 4px; }
@@ -195,7 +201,7 @@
   </header>
 
   <div class="cols">
-    <div class="col">
+    <div class="col-left">
       <div id="cpu">
         <div id="brand">Reading...</div>
         <div id="matched"></div>
@@ -207,7 +213,8 @@
         <div class="row"><div class="k">Free</div><div class="v" id="memory">-</div></div>
       </div>
 
-      <h2>Waiting on <span class="hint">time lost, not time used</span></h2>
+      <div>
+      <h2>Waiting on</h2>
       <div class="stalls">
         <div class="st" id="st-cpu">
           <div class="sl">processor</div>
@@ -228,20 +235,19 @@
           <div class="sr"></div>
         </div>
       </div>
+      </div>
 
-      <div class="note" id="stall-note"></div>
-
+      <div></div>
     </div>
 
-    <div class="col">
+    <div class="col-right">
       <div class="graph">
         <svg id="chart" viewBox="0 0 200 100" preserveAspectRatio="none" aria-hidden="true"></svg>
         <div class="strip" id="strip"></div>
         <div class="cap">
           <span>5 min ago</span>
           <span><b style="color:var(--plot-line)">&#9473;</b> busy &nbsp;
-                <b style="color:var(--strained)">&#9473;</b> waiting &nbsp;
-                colour bar: the rating at the time</span>
+                <b style="color:var(--strained)">&#9473;</b> waiting</span>
           <span>now</span>
         </div>
       </div>
@@ -251,14 +257,14 @@
         <div id="verdicts"></div>
       </div>
 
-      <div id="contributors-block" style="display:none">
+      <div id="contributors-block">
         <h2 id="contrib-head">Using the most</h2>
         <div class="plist" id="contributors"></div>
       </div>
     </div>
   </div>
 
-  <footer><span id="stamp"></span><span id="foot-note"></span></footer>
+  <footer><span id="stamp"></span></footer>
 </div>
 
 <script>
@@ -369,7 +375,7 @@ function drawTemperature(s) {
     // Per core readings are the point. Without them, say so briefly rather
     // than falling back to a single number pretending to be the same thing.
     note.textContent = s.temp_available
-      ? 'This processor does not report a temperature for each core.'
+      ? 'No per core sensor.'
       : s.temp_reason;
   }
 
@@ -394,27 +400,21 @@ function render(s) {
   $('clock').innerHTML = s.mhz
     ? `${s.mhz} MHz <span class="sub">sustained${s.base_mhz ? ', base ' + s.base_mhz : ''}</span>`
     : 'unavailable';
-  $('load').innerHTML = `${s.utilization.toFixed(0)}% <span class="sub">of ${s.logical} processors doing work</span>`;
-  $('memory').innerHTML = `${mb(s.available_mb)} <span class="sub">memory still free</span>`;
+  $('load').innerHTML = `${s.utilization.toFixed(0)}% <span class="sub">of ${s.logical} processors</span>`;
+  $('memory').innerHTML = mb(s.available_mb);
 
-  stall($('st-cpu'), s.stall_cpu, `${s.queue.toFixed(1)} jobs queued for a free processor`);
-  stall($('st-mem'), s.stall_memory, `${Math.round(s.hard_faults)} memory fetches from disk per second`);
-  stall($('st-disk'), s.stall_io, `${s.disk_ms.toFixed(2)} ms for the disk to answer`);
+  stall($('st-cpu'), s.stall_cpu, `${s.queue.toFixed(1)} queued`);
+  stall($('st-mem'), s.stall_memory, `${Math.round(s.hard_faults)} fetches/sec`);
+  stall($('st-disk'), s.stall_io, `${s.disk_ms.toFixed(2)} ms`);
 
   // Busy and waiting are different things, and the whole product rests on the
   // difference. Saying so once beats letting three flat bars read as broken.
-  // Busy and waiting are different things and the whole product rests on the
-  // difference, so it is stated in words rather than left to be inferred from
-  // three flat bars.
-  $('stall-note').textContent = Math.max(s.stall_cpu, s.stall_memory, s.stall_io) < 0.05
-    ? 'Nothing is waiting. A machine can be fully busy and perfectly healthy, and this is what that looks like.'
-    : 'How much time work spent stuck waiting instead of getting done.';
 
   drawGraph(s.history);
 
   const v = $('verdicts');
   if (!s.verdicts.length) {
-    v.innerHTML = '<div class="quiet">Nothing to report.</div>';
+    v.innerHTML = '';
   } else {
     const shown = s.verdicts.slice(0, VERDICT_SLOTS);
     const hidden = s.verdicts.length - shown.length;
@@ -425,35 +425,26 @@ function render(s) {
         ${x.cause
           ? `<div class="vc">Caused by <b>${esc(x.cause)}</b></div>
              ${x.action ? `<div class="va">${esc(x.action)}</div>` : ''}`
-          : `<div class="vn">Nothing stands out clearly enough to blame, so LoadBear is not guessing.</div>`}
+          : `<div class="vn">No clear cause.</div>`}
       </div>`).join('')
       + (hidden > 0 ? `<div class="more">and ${hidden} more</div>` : '');
   }
 
-  // Only present when a resource is actually under pressure. A standing table
-  // of what is running, reordering itself every tick, is Task Manager.
-  const cblock = $('contributors-block');
-  if (!s.contributors.length) {
-    cblock.style.display = 'none';
-  } else {
-    cblock.style.display = 'block';
-    $('contrib-head').textContent = CONTRIB_HEAD[s.driver] || 'Using the most';
-    $('contributors').innerHTML =
-      '<div class="p head"><div class="pn">name</div><div class="pv">cpu</div><div class="pv">memory</div></div>'
+  // Filled only when a resource is under pressure, but the panel is always
+  // there. A list that appears and disappears moves everything under it.
+  $('contrib-head').textContent = CONTRIB_HEAD[s.driver] || 'Using the most';
+  $('contributors').innerHTML = !s.contributors.length ? ''
+    : '<div class="p head"><div class="pn">name</div><div class="pv">cpu</div><div class="pv">memory</div></div>'
       + s.contributors.slice(0, CONTRIBUTOR_SLOTS).map(c => `
         <div class="p${c.is_container ? ' container' : ''}">
           <div class="pn">${esc(c.name)}</div>
           <div class="pv">${c.cpu.toFixed(1)}%</div>
           <div class="pv">${mb(c.memory_mb)}${c.limit_mb ? ' / ' + mb(c.limit_mb) : ''}</div>
         </div>`).join('');
-  }
 
   drawTemperature(s);
 
-  $('stamp').textContent = 'updated ' + new Date().toLocaleTimeString();
-  // Replaces a slogan that said "stall is measured, not utilization", which
-  // meant nothing to a reader and contradicted the Busy row beside it.
-  $('foot-note').textContent = 'the rating only changes after a state holds for 30 seconds';
+  $('stamp').textContent = new Date().toLocaleTimeString();
 }
 
 $('enable').addEventListener('click', async () => {
