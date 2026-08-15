@@ -76,8 +76,12 @@ impl WindowsTemperature {
     /// Does the open and the module load once. Everything after this is a read.
     pub fn new(key: Option<&CpuKey>) -> Self {
         let vendor = key.map(|k| k.vendor).unwrap_or(Vendor::Other);
-        let cores = std::thread::available_parallelism()
-            .map(|n| n.get())
+        // The machine's processors, not this process's affinity. Intel reads
+        // one MSR per logical processor by pinning to each in turn, so an
+        // affinity-limited count would silently stop enumerating part way.
+        let cores = crate::topology::detect()
+            .map(|t| t.logical_processors as usize)
+            .or_else(|| std::thread::available_parallelism().map(|n| n.get()).ok())
             .unwrap_or(8);
 
         let device = match PawnIo::open() {
@@ -183,6 +187,21 @@ impl WindowsTemperature {
         self.power.as_mut()?.read(device, now_ms)
     }
 
+    /// The junction temperature limit, when the part publishes one.
+    ///
+    /// Intel exposes TjMax in an MSR, so on those machines this is read from
+    /// the silicon and beats anything a database could carry. AMD does not:
+    /// it reads as zero from every available source on this Renoir part, which
+    /// the LB-02 spike established, so there it stays `None` and the
+    /// specification database remains the only source.
+    pub fn tjmax_c(&self) -> Option<f32> {
+        let device = self.device.as_ref()?;
+        match self.vendor {
+            Vendor::Intel => crate::intel::read_tjmax(device),
+            Vendor::Amd | Vendor::Other => None,
+        }
+    }
+
     /// Read temperature, or return an empty reading.
     ///
     /// Never returns `Result`. Temperature is optional throughout LoadBear and
@@ -205,10 +224,8 @@ impl WindowsTemperature {
                 }
                 r
             }
-            // Intel reads land in LB-12. The module is loaded and the path is
-            // reachable; it is simply not written yet, and saying so is better
-            // than returning a number from nowhere.
-            Vendor::Intel | Vendor::Other => TemperatureReading::default(),
+            Vendor::Intel => crate::intel::read_intel_temperature(device, self.cores),
+            Vendor::Other => TemperatureReading::default(),
         }
     }
 }

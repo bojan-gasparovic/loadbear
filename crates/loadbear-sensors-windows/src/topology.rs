@@ -100,6 +100,61 @@ pub fn detect() -> Option<Topology> {
     })
 }
 
+/// Highest processor index [`on_processor`] can reach.
+///
+/// `SetThreadAffinityMask` takes a mask covering the caller's own processor
+/// group, and a group holds at most 64. Reaching further needs
+/// `SetThreadGroupAffinity`, which is only worth writing when there is a
+/// machine to test it on.
+const MAX_AFFINITY_INDEX: u32 = 63;
+
+/// Run `f` pinned to one logical processor, then restore the previous affinity.
+///
+/// # Why this exists
+///
+/// Intel publishes core temperature in an MSR that is per logical processor,
+/// so reading it eight times from wherever the scheduler happens to be gives
+/// one core's reading eight times over. PawnIO's `ioctl_read_msr` takes no
+/// processor argument and executes in the calling thread's context, so pinning
+/// the caller is how a specific core gets read. It is what
+/// LibreHardwareMonitor does for the same reason.
+///
+/// # Why it verifies rather than assumes
+///
+/// Returns `None` unless the thread is genuinely observed running on the
+/// processor asked for. A silent failure here would not look like a failure:
+/// every core would report the same temperature under a different label, which
+/// is plausible enough to go unnoticed and is exactly the kind of confident
+/// wrongness this crate refuses to ship.
+pub fn on_processor<T>(index: u32, f: impl FnOnce() -> T) -> Option<T> {
+    use windows_sys::Win32::System::Threading::{
+        GetCurrentProcessorNumber, GetCurrentThread, SetThreadAffinityMask,
+    };
+
+    if index > MAX_AFFINITY_INDEX {
+        return None;
+    }
+
+    let mask: usize = 1usize << index;
+    // SAFETY: a pseudo handle to the current thread, and a mask with exactly
+    // one bit set. A zero return means the call failed and is handled.
+    let previous = unsafe { SetThreadAffinityMask(GetCurrentThread(), mask) };
+    if previous == 0 {
+        return None;
+    }
+
+    // Setting affinity does not migrate the thread synchronously on every
+    // Windows version, so the move is confirmed rather than assumed.
+    // SAFETY: no arguments, no failure mode.
+    let landed = unsafe { GetCurrentProcessorNumber() } == index;
+    let result = landed.then(f);
+
+    // SAFETY: restoring the mask this call replaced.
+    unsafe { SetThreadAffinityMask(GetCurrentThread(), previous) };
+
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -129,6 +184,45 @@ mod tests {
             t.logical_processors as usize >= allowed,
             "the machine cannot have fewer processors than this process may use"
         );
+    }
+
+    #[test]
+    fn pinning_actually_moves_the_thread_to_the_processor_asked_for() {
+        // The load bearing assumption behind per-core Intel temperature. This
+        // machine is AMD, so the MSR path cannot be tested here, but the
+        // pinning underneath it is the same call on any x86 machine and this
+        // proves it works rather than trusting that it does.
+        let t = detect().expect("topology must be available");
+        let last = (t.logical_processors - 1).min(MAX_AFFINITY_INDEX);
+
+        for i in [0, last] {
+            let seen = on_processor(i, || unsafe {
+                windows_sys::Win32::System::Threading::GetCurrentProcessorNumber()
+            });
+            assert_eq!(
+                seen,
+                Some(i),
+                "asked to run on processor {i} and did not land there"
+            );
+        }
+    }
+
+    #[test]
+    fn affinity_is_restored_afterwards() {
+        // A monitor that permanently pinned itself to core 0 would distort the
+        // very machine it is measuring.
+        let before = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+        let _ = on_processor(0, || ());
+        let after = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+        assert_eq!(before, after, "the previous affinity mask must be put back");
+    }
+
+    #[test]
+    fn a_processor_beyond_one_group_is_declined_rather_than_read_wrongly() {
+        // SetThreadAffinityMask cannot address past the caller's own group, and
+        // a 1 << 64 shift would be undefined rather than merely wrong.
+        assert_eq!(on_processor(MAX_AFFINITY_INDEX + 1, || 1), None);
+        assert_eq!(on_processor(u32::MAX, || 1), None);
     }
 
     #[test]

@@ -17,6 +17,7 @@ pub mod counters;
 pub mod cpuid;
 pub mod docker;
 pub mod installer;
+pub mod intel;
 pub mod mapping;
 pub mod pawnio;
 pub mod pm_table;

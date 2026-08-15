@@ -756,7 +756,15 @@ fn main() {
                             utilization_pct: Some(judged.processor_time_pct as f32),
                             package_watts: published.as_ref().and_then(|s| s.watts()),
                             package_temp_c: published.as_ref().and_then(|s| s.package()),
-                            tjmax_c: spec.as_ref().and_then(|s| s.tjmax_c),
+                            // The silicon first, the database second. Intel
+                            // publishes its junction limit in an MSR, which is
+                            // a better source than a figure somebody typed in,
+                            // and it is the only one available on a part the
+                            // database has never seen.
+                            tjmax_c: published
+                                .as_ref()
+                                .and_then(|s| s.tjmax())
+                                .or_else(|| spec.as_ref().and_then(|s| s.tjmax_c)),
                             throttle: ThrottleState {
                                 asserted: false,
                                 reason: None,

@@ -176,6 +176,11 @@ fn sample_loop(stop: &AtomicBool) {
     let key = current_cpu_key();
     let mut temp = WindowsTemperature::new(key.as_ref());
 
+    // A property of the part, not of the moment, so it is read once. On Intel
+    // this comes from the silicon and beats anything the database carries; on
+    // AMD it is absent and the database stays the only source.
+    let tjmax = temp.tjmax_c();
+
     while !stop.load(Ordering::Relaxed) {
         let now = now_ms();
         let reading = temp.read();
@@ -187,6 +192,7 @@ fn sample_loop(stop: &AtomicBool) {
             timestamp_ms: now,
             package_c: reading.package_c.unwrap_or(f32::NAN),
             package_watts: watts.unwrap_or(f32::NAN),
+            tjmax_c: tjmax.unwrap_or(f32::NAN),
             ..Default::default()
         };
 

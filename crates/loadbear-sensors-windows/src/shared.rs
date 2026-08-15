@@ -38,7 +38,7 @@ pub const MAPPING_SDDL: &str = "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GR;;;BU)";
 ///
 /// The reader refuses a version it does not know rather than misinterpreting
 /// the bytes, which matters because the two processes are upgraded separately.
-pub const LAYOUT_VERSION: u32 = 3;
+pub const LAYOUT_VERSION: u32 = 4;
 
 /// Behaviour revision of the helper.
 ///
@@ -54,7 +54,11 @@ pub const LAYOUT_VERSION: u32 = 3;
 /// Revision 4 publishes package power. Revision 3 read it correctly and then
 /// dropped it on the way into the mapping, so an unbumped revision would have
 /// left those installations showing no power for ever, silently.
-pub const HELPER_REVISION: u32 = 4;
+///
+/// Revision 5 publishes TjMax, which Intel parts report from the silicon and
+/// which the interface needs before it can colour a temperature or judge
+/// thermal headroom.
+pub const HELPER_REVISION: u32 = 5;
 
 /// Maximum temperature zones carried. Renoir reports one die plus up to eight
 /// CCD slots, so sixteen is generous without being wasteful.
@@ -104,6 +108,12 @@ pub struct SharedTemperature {
     /// derived by differencing an energy counter and one reading of an
     /// accumulator is not a rate.
     pub package_watts: f32,
+    /// Junction temperature limit in degrees C, or NaN when unknown.
+    ///
+    /// Intel publishes it in an MSR and the helper reads it from the silicon.
+    /// AMD does not, so it is NaN there and the specification database remains
+    /// the only source.
+    pub tjmax_c: f32,
     pub zone_count: u32,
     pub zones: [f32; MAX_ZONES],
     /// Zone labels, NUL padded, one per zone.
@@ -119,6 +129,7 @@ impl Default for SharedTemperature {
             timestamp_ms: 0,
             package_c: f32::NAN,
             package_watts: f32::NAN,
+            tjmax_c: f32::NAN,
             zone_count: 0,
             zones: [f32::NAN; MAX_ZONES],
             zone_labels: [[0u8; 8]; MAX_ZONES],
@@ -133,6 +144,15 @@ impl SharedTemperature {
             None
         } else {
             Some(self.package_watts)
+        }
+    }
+
+    /// The junction limit, if the part published one.
+    pub fn tjmax(&self) -> Option<f32> {
+        if self.tjmax_c.is_nan() {
+            None
+        } else {
+            Some(self.tjmax_c)
         }
     }
 
