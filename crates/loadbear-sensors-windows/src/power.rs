@@ -90,9 +90,7 @@ impl PackagePower {
     pub fn read(&mut self, pawn: &PawnIo, now_ms: u64) -> Option<f32> {
         let counter = read_msr(pawn, MSR_PKG_ENERGY_STATUS)? & (COUNTER_MODULUS - 1);
 
-        let Some((previous_counter, previous_ms)) = self.previous.replace((counter, now_ms)) else {
-            return None;
-        };
+        let (previous_counter, previous_ms) = self.previous.replace((counter, now_ms))?;
 
         let elapsed_ms = now_ms.checked_sub(previous_ms)?;
         if elapsed_ms == 0 {
@@ -108,7 +106,7 @@ impl PackagePower {
         let joules = ticks as f64 * self.joules_per_count;
         let watts = (joules / (elapsed_ms as f64 / 1000.0)) as f32;
 
-        (watts.is_finite() && watts >= 0.0 && watts < IMPLAUSIBLE_WATTS).then_some(watts)
+        (watts.is_finite() && (0.0..IMPLAUSIBLE_WATTS).contains(&watts)).then_some(watts)
     }
 }
 
@@ -160,7 +158,7 @@ mod tests {
             .unwrap_or(counter + COUNTER_MODULUS - previous_counter);
         let joules = ticks as f64 * p.joules_per_count;
         let watts = (joules / (elapsed_ms as f64 / 1000.0)) as f32;
-        (watts.is_finite() && watts >= 0.0 && watts < IMPLAUSIBLE_WATTS).then_some(watts)
+        (watts.is_finite() && (0.0..IMPLAUSIBLE_WATTS).contains(&watts)).then_some(watts)
     }
 
     #[test]
