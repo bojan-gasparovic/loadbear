@@ -20,7 +20,7 @@ use loadbear_core::{
     classify, diagnose, evaluate, Assessment, ContainerReading, CpuReading, Reading, Resource,
     SpecDb, ThrottleState, Tier, TierReason, TierTracker, VerdictKind,
 };
-use loadbear_sensors_windows::counters::{to_stall, Counters, SampleWindow};
+use loadbear_sensors_windows::counters::{to_stall, total_physical_mb, Counters, SampleWindow};
 use loadbear_sensors_windows::cpuid::{brand_string, current_cpu_key};
 use loadbear_sensors_windows::docker;
 use loadbear_sensors_windows::installer;
@@ -115,6 +115,8 @@ struct Status {
     utilization: f64,
     queue: f64,
     available_mb: f64,
+    /// Installed physical memory, so the free figure means something.
+    total_mb: f64,
     hard_faults: f64,
     disk_ms: f64,
     disk_queue: f64,
@@ -164,6 +166,7 @@ impl Default for Status {
             utilization: 0.0,
             queue: 0.0,
             available_mb: 0.0,
+            total_mb: 0.0,
             hard_faults: 0.0,
             disk_ms: 0.0,
             disk_queue: 0.0,
@@ -451,6 +454,8 @@ fn main() {
                 let logical = std::thread::available_parallelism()
                     .map(|n| n.get() as u32)
                     .unwrap_or(1);
+                // Installed memory does not change while the application runs.
+                let total_mb = total_physical_mb().unwrap_or(0.0);
 
                 // Temperature comes from the helper service through shared
                 // memory, never from this process. PawnIO's device admits only
@@ -594,6 +599,7 @@ fn main() {
                             utilization: sample.processor_time_pct,
                             queue: sample.processor_queue_length,
                             available_mb: sample.available_mbytes,
+                            total_mb,
                             hard_faults: sample.pages_input_per_sec,
                             disk_ms: sample.disk_seconds_per_transfer * 1000.0,
                             disk_queue: sample.disk_queue_length,

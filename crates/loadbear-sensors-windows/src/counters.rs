@@ -182,6 +182,25 @@ impl Drop for Counters {
     }
 }
 
+/// Total physical memory, in megabytes.
+///
+/// Static for the life of the machine, so read once rather than sampled. It
+/// exists because "2.7 GB free" is not a fact anybody can act on without
+/// knowing whether the machine has four gigabytes or sixty-four.
+pub fn total_physical_mb() -> Option<f64> {
+    use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+
+    let mut status: MEMORYSTATUSEX = unsafe { std::mem::zeroed() };
+    status.dwLength = std::mem::size_of::<MEMORYSTATUSEX>() as u32;
+    // SAFETY: `status` is a correctly sized buffer and `dwLength` tells the
+    // call so, which is how this API is told what it was given.
+    let ok = unsafe { GlobalMemoryStatusEx(&mut status) };
+    if ok == 0 {
+        return None;
+    }
+    Some(status.ullTotalPhys as f64 / 1_048_576.0)
+}
+
 /// How many samples the rolling window holds.
 ///
 /// At the application's sampling interval of 1.5 seconds this covers roughly
@@ -556,6 +575,15 @@ mod tests {
         let averaged = w.average().unwrap();
         assert_eq!(averaged.processor_queue_length, 7.5);
         assert!(to_stall(&averaged, 16).cpu < to_stall(&sample_with_queue(30.0), 16).cpu);
+    }
+
+    #[test]
+    fn this_machine_reports_a_plausible_amount_of_memory() {
+        let total = total_physical_mb().expect("Windows must report installed memory");
+        assert!(
+            total > 1024.0 && total < 4_194_304.0,
+            "installed memory should be between a gigabyte and four terabytes, got {total} MB"
+        );
     }
 
     #[test]

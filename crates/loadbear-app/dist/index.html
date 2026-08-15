@@ -210,11 +210,11 @@
       <div class="rows">
         <div class="row"><div class="k">Clock</div><div class="v" id="clock">-</div></div>
         <div class="row"><div class="k">Busy</div><div class="v" id="load">-</div></div>
-        <div class="row"><div class="k">Free</div><div class="v" id="memory">-</div></div>
+        <div class="row"><div class="k">Memory</div><div class="v" id="memory">-</div></div>
       </div>
 
       <div>
-      <h2>Waiting on</h2>
+      <h2>Bottlenecks</h2>
       <div class="stalls">
         <div class="st" id="st-cpu">
           <div class="sl">processor</div>
@@ -383,6 +383,16 @@ function drawTemperature(s) {
   if (!en.disabled) en.textContent = s.temp_available ? 'Update helper' : 'Enable temperature';
 }
 
+function clockText(s) {
+  if (!s.mhz) return 'unavailable';
+  if (!s.base_mhz) return `${s.mhz} MHz`;
+  const d = s.mhz - s.base_mhz;
+  if (d >= 0) {
+    return `${s.mhz} MHz <span class="sub">${d} above the ${s.base_mhz} promised</span>`;
+  }
+  return `${s.mhz} MHz <span class="sub">${-d} below the ${s.base_mhz} promised</span>`;
+}
+
 function render(s) {
   const tier = s.tier.toLowerCase();
   $('tier').textContent = s.tier;
@@ -397,11 +407,14 @@ function render(s) {
     ? `${s.matched} (${s.cores}C/${s.threads}T, base ${s.base_mhz} MHz, ${s.tdp_watts} W)`
     : 'not in the specification database, so published limits are unavailable';
 
-  $('clock').innerHTML = s.mhz
-    ? `${s.mhz} MHz <span class="sub">sustained${s.base_mhz ? ', base ' + s.base_mhz : ''}</span>`
-    : 'unavailable';
+  // "3227 MHz sustained, base 2000" left the reader to work out which way is
+  // good. The thing worth knowing is whether the processor is keeping the
+  // manufacturer's promise, so say that instead of printing both numbers.
+  $('clock').innerHTML = clockText(s);
   $('load').innerHTML = `${s.utilization.toFixed(0)}% <span class="sub">of ${s.logical} processors</span>`;
-  $('memory').innerHTML = mb(s.available_mb);
+  $('memory').innerHTML = s.total_mb > 0
+    ? `${mb(s.available_mb)} free <span class="sub">of ${mb(s.total_mb)}</span>`
+    : `${mb(s.available_mb)} free`;
 
   stall($('st-cpu'), s.stall_cpu, `${s.queue.toFixed(1)} queued`);
   stall($('st-mem'), s.stall_memory, `${Math.round(s.hard_faults)} fetches/sec`);
