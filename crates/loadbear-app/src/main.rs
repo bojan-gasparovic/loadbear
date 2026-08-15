@@ -555,6 +555,19 @@ fn main() {
 
     tauri::Builder::default()
         .manage(shared.clone())
+        // Closing the window hides it rather than ending the process.
+        //
+        // LoadBear is a resident monitor. Its whole proposition is noticing an
+        // overload while the user is busy with something else, which it cannot
+        // do if the obvious way to get the window off the screen also stops the
+        // sampling loop. Quitting stays available, deliberately, on the tray
+        // menu.
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.hide();
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             get_status,
             enable_temperature,
