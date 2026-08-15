@@ -1,156 +1,212 @@
 # Picking LoadBear back up
 
-Written 2026-08-14 at the end of the first working session. Read this before
-`DESIGN.md`, because several things in the spec were overtaken by what the
-machine actually did.
+Written 2026-08-14, rewritten 2026-08-16 at the end of the third working
+session. Read this before `DESIGN.md`, because several things in that spec were
+overtaken by what the machine actually did, and one whole section of it
+describes a feature that has since been cancelled.
+
+## Start here
+
+**The one thing standing between LoadBear and other people: nothing is
+installable.** `cargo tauri` is not installed, no bundle has ever been
+produced, and `tauri.conf.json`'s `bundle` block lists only icons. That last
+part matters more than the first two: `service_control::helper_path()` looks
+for `loadbear-service.exe` beside the running application, so a bundle built as
+configured today would install an app whose temperature and power are
+permanently dead, with a misleading message explaining why. The helper has to
+be added to the bundle as an external binary before a bundle is worth making.
+
+Everything else on the list is a quality gap. This one is the difference
+between a repository and a product.
 
 ## Where it got to
 
-It runs. `loadbear-app.exe` is a Tauri tray application showing tier, clock
-against guaranteed base clock, utilization, stall bars, findings with their
-basis and their cause, the heaviest processes, any containers, and CPU
-temperature including per-core. 126 tests, clippy and rustfmt clean.
+It runs, it is used daily, and it is pushed. **202 tests**, clippy clean.
 
 ```
 cd context-library/hobby-projects/loadbear
-cargo run -p loadbear-app
+cargo build --release
+target\release\loadbear-app.exe
 ```
 
-Four crates:
+Both repositories were fully pushed as of 2026-08-16 01:30. Verified against
+the remotes rather than local refs, after I had spent most of a session
+repeating a stale "40 commits unpushed" claim that was wrong.
 
 | Crate | Role |
 |---|---|
-| `loadbear-core` | Pure diagnosis. No OS calls. Verdicts, tiers, interruption contract |
+| `loadbear-core` | Pure diagnosis. No OS calls. Verdicts, tiers, attribution |
 | `loadbear-sensors-windows` | Everything platform specific. The only crate allowed near a driver |
 | `loadbear-service` | Elevated helper. Runs as Local System, publishes to shared memory |
 | `loadbear-app` | Unprivileged interface |
 
-## The five things that cost the most time
+## The bug pattern that has now cost three separate faults
 
-Each of these was found by running the thing, not by reasoning about it. Several
-contradicted an explanation I had given confidently minutes earlier.
+**A value computed correctly in one crate, then dropped by hand-written field
+copying on its way across a boundary. It never looks like a bug. It looks like
+a sensor that does not work.**
+
+1. **`package_watts` was never published.** `mapping::publish` copied the
+   shared record field by field and omitted it, so the mapping kept the `NaN`
+   it was initialised with at creation. The helper read power correctly for a
+   full day while the interface showed nothing. The tell was that the raw bits
+   were byte-identical on every sample, which is what an unwritten field looks
+   like and not what a failing sensor looks like. `--probe-power` read 17 W
+   from the very binary that was publishing nothing, because the probe
+   exercises the sensor and never exercises the writer.
+2. **`reported_base_mhz: None` was hardcoded** in `loadbear-app/src/main.rs`.
+   The core engine could judge the clock on any processor; the application
+   never passed it the number, so the feature could not fire at all in the
+   shipped product.
+3. **Cores, threads and base clock came from the specification database**,
+   which holds three processors, so every other machine showed zeros and the
+   power row rendered "of 0 W rated".
+
+The fix for the first was structural and worth keeping: `mapping::payload` now
+takes everything but `version`, `helper_revision` and `sequence` wholesale via
+`..*reading`, so omitting a field is unrepresentable rather than merely fixed
+once. **When adding a field to a struct that crosses a process boundary, check
+whether anything copies it by hand.**
+
+## The five things that cost the most time originally
+
+Each was found by running the thing, not by reasoning about it.
 
 1. **WinRing0 is dead.** Defender classifies it as a vulnerable driver and
    Windows 11 22H2 blocks it. The only workaround disables a Microsoft security
    control. Do not let anyone reintroduce it. PawnIO replaced it.
-
 2. **PawnIO admits only SYSTEM and Administrators.** From its own INF:
    `D:P(A;;GA;;;SY)(A;;GA;;;BA)`. An unprivileged process cannot read
    temperature at all. This is why the helper service exists, and it is the
    same architecture Core Temp and HWiNFO use.
-
 3. **Per-core temperature lives in the SMU PM table, not in SMN registers.**
-   `k10temp` and LibreHardwareMonitor both read SMN, which yields a die
-   temperature and one reading per CCD. Renoir is single-CCD, hence one value.
-   Core Temp reads the PM table. Indices **215 to 222** at PM table version
-   **`0x370005`** are per-core, established by dumping the table and matching
-   the *shape* against Core Temp, not from any documentation.
-
-4. **AMD does not publish TjMax.** Zero across all 128 slots on the 4980U. It
-   has to come from the specification database. Intel exposes it via MSR
-   `0x1A2`.
-
+   Indices **215 to 222** at PM table version **`0x370005`**, established by
+   dumping the table and matching the shape against Core Temp.
+4. **AMD does not publish TjMax.** Zero across all 128 slots on the 4980U, so
+   it comes from the specification database. Intel exposes it via MSR `0x1A2`
+   and LoadBear now reads it from there.
 5. **The base clock verdict fires correctly on this machine.** The Surface
-   sustains roughly 1400 MHz against a guaranteed 2000 under load. That is a
-   true positive and matches the reviewed 20 W shared power budget.
+   sustains well under its guaranteed 2000 MHz on a long load. True positive.
 
-## Bugs I created and how they presented, so they are recognisable
+## The charger finding, which is the best story in the project
 
-- **CPUID double-count.** `raw-cpuid` already folds extended family and model
-  in. Adding them again gave family 31 model 192, the database lookup silently
-  returned `None`, and every check needing published data quietly stopped.
-- **Two different clocks.** Helper stamped readings with its process uptime,
-  interface checked against its own. Everything looked stale forever. Both now
-  use `GetTickCount64`.
-- **Silent failed upgrade.** Copied the new helper over a running one, which
-  Windows refuses, and treated the failure as tolerable. Setup reported success
-  while leaving the old binary in place, so a shipped feature never ran.
-- **Layout bump swallowed the case.** Bumping the shared layout version made
-  the reader reject the running helper's records entirely, showing
-  "unavailable" for a helper that was fine and merely needed updating.
+Measured 2026-08-15. On a USB-C charger the package sat pinned at a flat
+**9.309 W against a 15 W rating** and the processor held **exactly 70.0%
+performance, 1400 MHz**, even at 47% utilization and only 57 to 58 C. On the
+proper charger the same machine idled at 3200 to 3640 MHz and decayed under a
+five minute all-core load like this:
 
-The pattern is the same every time: something failed in a way that looked like
-absence rather than error.
+| Time | Clock |
+|---|---|
+| t+10s | 3377 MHz |
+| t+120s | 2337 MHz |
+| **t+200s** | **1999 MHz, crossing the 2000 base** |
+| t+300s | 1799 MHz, still falling |
+
+The defensible claims are the flat 9.309 W ceiling and the light-load
+difference, 1400 against 3400 MHz. **Not** "40% faster builds", which was an
+early overreach from a 40 second burst presented as a sustained measurement.
+This is what produced the `PowerBelowRating` verdict.
+
+## Done in the 2026-08-16 session
+
+- **Package power published** (LB-21 half). The `publish` fault above.
+- **Intel temperature and TjMax** (LB-12). Written, wired, unit tested, and
+  **never run on Intel silicon**, because this is an AMD machine. Tracked as
+  LB-22. Per-core needs the thread pinned, since the MSR is per logical
+  processor; `topology::on_processor` pins and then confirms with
+  `GetCurrentProcessorNumber` that it landed, declining rather than guessing.
+  **The failure to look for is per-core values that are all identical**, which
+  would look entirely reasonable on screen.
+- **Cores, threads and base clock now come from the OS**, not the database.
+  New `topology` module walking `GetLogicalProcessorInformationEx`. The
+  database is now an enhancement carrying only the rated power band and TjMax.
+- **Icons.** The taskbar button was showing the bundled application icon, a
+  byte-identical copy of the easy bear, so it always read "easy" whatever the
+  machine was doing. It now follows the tier. All three tray icons were flat
+  white on transparency and are now painted by tier at runtime. The application
+  icon is the strained bear in red, and `icon.ico` went from a single 16 pixel
+  entry to six.
+- **Closing the window hides it** rather than ending the process.
+- **README rewritten** to describe what LoadBear actually does, with a Known
+  gaps section.
+- **Every LB ticket reconciled** with reality. The board had fourteen tickets
+  sitting on `Now` that had been finished for days.
+
+## Decisions that should not be relitigated without reason
+
+- **Notifications are cancelled.** Bojan's call, 2026-08-16. LoadBear is a
+  monitor you look at. `NotificationGate` was removed from `loadbear-core` the
+  same day; `Cause`, `CauseKind`, `Finding` and `Remediation` survive because
+  attribution uses them. It is one `git revert` away if this ever changes.
+  **`docs/DESIGN.md` still documents the interruption contract at length and
+  has not been updated.**
+- Never invent a "normal" temperature range. Chassis and ambient account for
+  around 20 C of variance that has nothing to do with the CPU model.
+- Every verdict traces to a vendor guarantee or a hardware bit. The `basis`
+  field exists to keep that honest, and nothing is derived from a forum post.
+- Temperature is optional everywhere. `WindowsTemperature::read` returns a
+  reading rather than a `Result`, so absence cannot be treated as failure.
+- LoadBear ships the LGPL-2.1 PawnIO modules but not the driver or
+  `PawnIOLib.dll`, which arrive with the user's own install.
+- Unprivileged process coverage is **0.39 at idle and 0.92 under load**. The
+  idle gap is kernel and interrupt time belonging to no process. Attribution
+  only runs under load, where coverage is good. Do not raise privileges.
 
 ## Development gotchas
 
 - **The helper holds its own binary.** It installs to `%ProgramFiles%\LoadBear`
-  and runs as SYSTEM. Rebuilding is fine, but if it ever gets registered from
-  `target/debug` again you will need an elevated `sc.exe stop LoadBearHelper`
-  before you can build.
-- **Updating the helper needs one elevated click.** The interface detects a
-  stale helper by revision and offers "Update helper". Bump
-  `shared::HELPER_REVISION` whenever the helper starts producing something new,
-  or the interface will never notice.
-- **Bump `LAYOUT_VERSION` when `SharedTemperature` changes**, and remember the
-  reader must still be able to detect the mismatch. `version` is the first
-  field and must stay there.
-
-## Done since, 2026-08-15
-
-**Attribution and utilization, LB-16 and LB-17.** 126 tests, clippy and rustfmt
-clean, and the application runs.
-
-- Utilization is measured (`% Processor Time`) and counters average over a four
-  sample window. `BelowBaseClock` now fires only above 80% utilization, because
-  Windows averages frequency across parked cores and a half-idle machine reads
-  below base for reasons that are not a fault.
-- Processes are enumerated unprivileged and ranked in
-  `loadbear-core/src/attribution.rs`. Containers come from the Docker Engine
-  API over the named pipe, polled on its own thread because a pipe read has no
-  timeout.
-- Attribution withholds a cause rather than guessing: minimum share, dominance
-  over the runner-up, coverage against measured utilization, and grouping by
-  name so a build of twelve compilers reads as one contributor.
-
-The number worth knowing: **unprivileged process coverage is 0.39 at idle and
-0.92 under load.** The idle gap is kernel and interrupt time belonging to no
-process. Attribution only runs when something is wrong, which is where coverage
-is good. Do not raise privileges to close it.
+  and runs as SYSTEM. Re-register with an elevated
+  `target\release\loadbear-service.exe --setup`, which stops, deletes, copies
+  and restarts in that order.
+- **Bump `HELPER_REVISION`** whenever the helper starts producing something new,
+  or an installed older helper will silently never produce it and nothing
+  anywhere will say why. Currently **5**.
+- **Bump `LAYOUT_VERSION`** when `SharedTemperature` changes. Currently **4**.
+  `version` is the first field and must stay there so a reader can detect a
+  mismatch it cannot otherwise interpret.
+- **Rebuilding the app while it runs fails**, since Windows holds the exe open.
+  Stop it first.
+- Changing `icon.ico` needs `cargo clean -p loadbear-app` to re-run the build
+  script that embeds it.
 
 ## What is not done
 
 Roughly in the order I would pick it up.
 
-1. **Notifications.** The interruption contract is fully built and tested in
-   `loadbear-core`, attribution now feeds it real causes, and nothing calls it.
-   This is the smallest remaining step to the product working end to end.
-2. **Per-process hard faults.** I/O attribution is written but always returns
-   nothing, because Windows exposes no documented per-process hard fault rate
-   and `PageFaultCount` conflates soft with hard. Needs a real source, probably
-   ETW, or it stays silent.
-3. **Docker CPU is always zero.** `one-shot=true` ships no `precpu_stats`
-   baseline. Memory is exact and is what the exemplar finding turns on, so this
-   is a gap rather than a break. Fixing it means keeping a previous sample the
-   way `ProcessSampler` does.
-4. **The sample store**, which v1 scope said to write from day one.
-5. **Intel temperature.** Module loads, path is reachable, code unwritten.
-   Needs an Intel machine to verify.
-6. **macOS and Linux backends.** Designed for, not started. The Docker
-   transport is the only platform-specific part of container attribution.
+1. **Nothing is installable.** See Start here. This is the only item that
+   blocks other people entirely.
+2. **LB-19: `--dump-pmtable` still ships** in the helper. It dumps raw SMU
+   table contents from a process running as Local System. Its own title says
+   "before distribution".
+3. **LB-22: verify Intel temperature on Intel hardware.** Needs a machine
+   nobody here has.
+4. **LB-21 second half: the throttle verdict never fires.** The check is
+   written and tested. No register source has been found that meets the
+   provenance rule.
+5. **LB-20: disk stall is scaled at 50 ms per transfer**, a mechanical disk
+   figure. An NVMe under a load built to saturate it peaked at 3.4 ms, so that
+   bar cannot leave single digits.
+6. **`docs/DESIGN.md`** still describes the cancelled notification gate.
+7. **Docker CPU always reads zero.** `one-shot=true` ships no `precpu_stats`
+   baseline. Memory is exact.
+8. **Per-process hard faults.** Written but always returns nothing; Windows
+   exposes no documented per-process hard fault rate. Needs ETW or stays
+   silent.
+9. **The bear is a placeholder**, and the silhouettes have no outline, so they
+   are at the mercy of whatever they sit on. The tier transitions have now been
+   watched firing on real hardware over normal work, which the design said was
+   the precondition for briefing an illustrator honestly.
+10. **The repository is still private.** The application footer links to it and
+    will 404 for anyone else until that changes.
+11. **macOS and Linux backends.** Designed for, not started.
 
-## Things to remove or revisit
+## Smaller things noticed and left
 
-- `loadbear-service --dump-pmtable` is diagnostic scaffolding. Useful for
-  widening PM table support to other CPUs, but it should not ship.
-- The stall normalisation constants in `counters::scale` are unsourced first
-  guesses, marked as such. They move the tier but never a verdict.
-- The five minute sustained window in the interruption contract is also a first
-  guess, never tuned against real use.
-- **The Beacon tickets are stale.** LB-10 to LB-14 describe a design that
-  changed substantially once the PawnIO security descriptor was discovered.
-  Reconcile them before treating them as a plan.
-
-## Decisions that were made and should not be relitigated without reason
-
-- Never invent a "normal" temperature range. Chassis and ambient account for
-  around 20 degrees C of variance that has nothing to do with the CPU model,
-  which is why no vendor publishes one.
-- Every verdict traces to a vendor guarantee, a hardware bit, or the machine's
-  own history. The `basis` field on `Verdict` exists to keep that honest.
-- Notify only when sustained, diagnosable and actionable all hold. Notification
-  fatigue is what kills tools in this category.
-- Temperature is optional everywhere. `WindowsTemperature::read` returns a
-  reading rather than a `Result` so a caller cannot treat absence as failure.
-- LoadBear bundles the PawnIO installer and the LGPL-2.1 modules, but not the
-  driver or `PawnIOLib.dll`, which arrive with the user's own install.
+- `Status.ctdp_min_watts` in `loadbear-app` is serialised and rendered by
+  nothing.
+- The three CPU database entries are all marked `UNVERIFIED` and still want
+  checking against vendor product pages. This matters much less than it did,
+  since only the power band and TjMax now come from there.
+- The stall normalisation constants in `counters` are unsourced first guesses,
+  marked as such. They move the tier but never a verdict.
