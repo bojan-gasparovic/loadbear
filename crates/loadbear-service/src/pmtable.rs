@@ -20,8 +20,18 @@ use loadbear_sensors_windows::pawnio::PawnIo;
 const MODULE_RYZEN_SMU: &[u8] =
     include_bytes!("../../loadbear-sensors-windows/modules/RyzenSMU.bin");
 
-/// Plausible range for something that might be a core temperature in Celsius.
-const PLAUSIBLE: std::ops::RangeInclusive<f32> = 20.0..=110.0;
+/// Ranges worth printing, with what a value in each might be.
+///
+/// The first pass of this tool printed only 20 to 110, because it was hunting
+/// core temperatures and found them. That window hides package power, which on
+/// a 15 W part reads in single digits, so the table was dumped once and the
+/// power figures were never in the output.
+const BANDS: [(&str, f32, f32); 4] = [
+    ("power W", 0.5, 65.0),
+    ("temp C", 20.0, 110.0),
+    ("volts", 0.4, 1.6),
+    ("clock MHz", 400.0, 5200.0),
+];
 
 pub fn dump() -> i32 {
     let pawn = match PawnIo::open() {
@@ -78,23 +88,29 @@ pub fn dump() -> i32 {
     // Each 64-bit word carries two 32-bit floats. Print only those in a range
     // that could be a temperature, with their index, so they can be correlated
     // against a known-good reading.
-    println!("plausible temperature-shaped values, by float index:");
-    let mut shown = 0;
-    for (i, w) in words.iter().enumerate() {
-        for half in 0..2 {
-            let bits = (*w >> (32 * half)) as u32;
-            let f = f32::from_bits(bits);
-            if f.is_finite() && PLAUSIBLE.contains(&f) {
-                println!("  [{:4}]  {:8.2}", i * 2 + half, f);
-                shown += 1;
+    // Printed per band rather than in one list, so a value can be recognised
+    // by what it plausibly is rather than only by where it sits.
+    for (label, lo, hi) in BANDS {
+        println!("{label} shaped values ({lo} to {hi}), by float index:");
+        let mut shown = 0;
+        for (i, w) in words.iter().enumerate() {
+            for half in 0..2 {
+                let bits = (*w >> (32 * half)) as u32;
+                let f = f32::from_bits(bits);
+                if f.is_finite() && f >= lo && f <= hi {
+                    println!("  [{:4}]  {:10.3}", i * 2 + half, f);
+                    shown += 1;
+                }
             }
         }
+        if shown == 0 {
+            println!("  none.");
+        }
+        println!();
     }
-    if shown == 0 {
-        println!("  none. Either the table did not populate or the layout differs.");
-    }
-    println!();
-    println!("Compare these against Core Temp's per-core values to identify which");
-    println!("indices, if any, are the per-core sensors.");
+
+    println!("Per-core temperatures are already known: indices 215 to 222 at table");
+    println!("version 0x370005. What is wanted now is package power, which should");
+    println!("track the wattage another tool reports and should move under load.");
     0
 }
