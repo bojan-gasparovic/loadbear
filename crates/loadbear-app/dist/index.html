@@ -142,10 +142,14 @@
   .quiet { color: var(--faint); font-size: 11.5px; }
 
   .plist { height: 100%; overflow: hidden; }
-  .plist .p { display: grid; grid-template-columns: 1fr 44px 60px; gap: 7px;
+  /* The memory column is fixed, so widening the window alone sends the extra
+     space to the name and leaves a container's "341 MB / 7.5 GB" wrapping in
+     the same cramped cell. It is sized for that longest form instead. */
+  .plist .p { display: grid; grid-template-columns: 1fr 46px 96px; gap: 8px;
               font-size: 11px; padding: 2px 0; align-items: baseline; }
   .plist .p .pn { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .plist .p .pv { text-align: right; color: var(--dim); font-variant-numeric: tabular-nums; }
+  .plist .p .pv { text-align: right; color: var(--dim); font-variant-numeric: tabular-nums;
+                  white-space: nowrap; }
   .plist .p.head { color: var(--hair); font-size: 9px; text-transform: uppercase; letter-spacing: .05em; }
   .plist .p.head .pv { color: var(--hair); }
   /* A container is drawn as a child of the Docker row above it, because that

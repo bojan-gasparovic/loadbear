@@ -10,7 +10,7 @@
     "windows": [
       {
         "title": "LoadBear",
-        "width": 760,
+        "width": 900,
         "height": 560,
         "resizable": false,
         "visible": true,
