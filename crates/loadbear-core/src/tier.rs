@@ -268,7 +268,7 @@ mod tests {
         StallSignal {
             cpu: 0.02,
             memory: 0.0,
-            io: 0.01,
+            io: Some(0.01),
         }
     }
 
@@ -303,7 +303,7 @@ mod tests {
         let stall = StallSignal {
             cpu: 0.10,
             memory: 0.55,
-            io: 0.20,
+            io: Some(0.20),
         };
         assert_eq!(classify(&[], &stall).tier, Tier::Braced);
     }
@@ -313,7 +313,7 @@ mod tests {
         let stall = StallSignal {
             cpu: 0.10,
             memory: 0.85,
-            io: 0.20,
+            io: Some(0.20),
         };
         assert_eq!(
             classify(&[], &stall).tier,
@@ -328,7 +328,7 @@ mod tests {
         let stall = StallSignal {
             cpu: 0.10,
             memory: 0.85,
-            io: 0.20,
+            io: Some(0.20),
         };
         assert_eq!(classify(&v, &stall).tier, Tier::Strained);
     }
@@ -600,7 +600,7 @@ mod tracker_tests {
         let stall = StallSignal {
             cpu: 0.10,
             memory: 0.95,
-            io: 0.20,
+            io: Some(0.20),
         };
         let a = classify(&[], &stall);
         assert_eq!(a.tier, Tier::Strained);
@@ -621,7 +621,7 @@ mod tracker_tests {
             &StallSignal {
                 cpu: 0.0,
                 memory: 0.0,
-                io: 0.0,
+                io: Some(0.0),
             },
         );
         assert_eq!(a.reason, TierReason::Verdict(VerdictKind::BelowBaseClock));
@@ -634,7 +634,7 @@ mod tracker_tests {
             &StallSignal {
                 cpu: 0.01,
                 memory: 0.0,
-                io: 0.0,
+                io: Some(0.0),
             },
         );
         assert_eq!(a.tier, Tier::Easy);

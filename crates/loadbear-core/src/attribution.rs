@@ -497,7 +497,7 @@ mod tests {
         StallSignal {
             cpu: 0.0,
             memory: 0.0,
-            io: 0.0,
+            io: Some(0.0),
         }
     }
 
@@ -505,7 +505,7 @@ mod tests {
         StallSignal {
             cpu: 0.10,
             memory: 0.90,
-            io: 0.20,
+            io: Some(0.20),
         }
     }
 
@@ -769,7 +769,7 @@ mod tests {
             20.0,
             quiet(),
         );
-        r.stall.io = 0.9;
+        r.stall.io = Some(0.9);
         assert!(
             r.processes.iter().all(|p| p.hard_faults_per_sec.is_none()),
             "the premise of the test is that the backend cannot supply the figure"

@@ -1796,6 +1796,7 @@ dependencies = [
  "libloading 0.9.0",
  "loadbear-core",
  "raw-cpuid",
+ "serde_json",
  "thiserror 2.0.20",
  "windows-service",
  "windows-sys 0.61.2",

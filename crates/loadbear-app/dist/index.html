@@ -130,9 +130,9 @@
   .v .sub { color: var(--dim); font-size: 10.5px; }
 
   /* Each stall carries the quantity it was actually measured from, because the
-     percentage is a normalisation against a constant and the raw figure is the
-     measurement. Where the constant is a poor fit for the hardware, and for
-     disk latency it always is, the raw figure is the part worth reading. */
+     percentage is a normalisation and the raw figure is the measurement. That
+     matters most for disk, whose saturation point is learned from this machine
+     rather than declared, and is unknown until it has been. */
   .stalls { display: grid; gap: 7px; }
   .st { display: grid; grid-template-columns: 58px 1fr 30px; gap: 8px; align-items: center; }
   .st .sl { font-size: 10.5px; color: var(--faint); }
@@ -143,6 +143,12 @@
   .st.max .fill { background: var(--strained); }
   .st .sv { font-size: 10.5px; text-align: right; color: var(--dim);
             font-variant-numeric: tabular-nums; }
+  /* Not measured yet, which is not the same as measured at zero. The track is
+     struck through rather than left empty, because an empty bar beside two
+     full ones reads as a resource with nothing to do. */
+  .st.unknown .track { background: repeating-linear-gradient(
+      135deg, var(--well) 0 4px, transparent 4px 8px); }
+  .st.unknown .sv { font-size: 9px; color: var(--hair); letter-spacing: .02em; }
   .st .sr { grid-column: 2 / 4; font-size: 10px; color: var(--hair);
             font-variant-numeric: tabular-nums; margin-top: -4px; }
 
@@ -519,10 +525,26 @@ const mb = v => v >= 1024 ? (v / 1024).toFixed(1) + ' GB' : Math.round(v) + ' MB
 // actual measurement, so a bar sitting near zero can be read as "the disk is
 // answering in half a millisecond" rather than as a broken indicator.
 function stall(el, v, raw) {
+  // Null means nobody has established what this resource's saturated looks
+  // like on this machine yet. Disk is the one that does it: its saturation
+  // point is learned from the machine's own quiet behaviour, because no fixed
+  // figure fits both a mechanical disk and an NVMe. Drawing 0% while that is
+  // still being learned would say the disk is idle, which is a different
+  // claim and not one anything here can make.
+  const known = v !== null && v !== undefined;
+  el.classList.toggle('unknown', !known);
+  el.querySelector('.sr').textContent = raw;
+
+  if (!known) {
+    el.querySelector('.fill').style.width = '0%';
+    el.querySelector('.sv').textContent = 'learning';
+    el.classList.remove('hot', 'max');
+    return;
+  }
+
   const pct = Math.round(v * 100);
   el.querySelector('.fill').style.width = Math.max(pct, v > 0 ? 1 : 0) + '%';
   el.querySelector('.sv').textContent = pct + '%';
-  el.querySelector('.sr').textContent = raw;
   el.classList.toggle('hot', v >= 0.40 && v < 0.80);
   el.classList.toggle('max', v >= 0.80);
 }
@@ -554,7 +576,10 @@ function drawGraph(history) {
   const line = key => history.map((h, i) => `${x(i).toFixed(2)},${y(key(h)).toFixed(2)}`).join(' ');
 
   const util = line(h => h.utilization / 100);
-  const stall = line(h => Math.max(h.cpu, h.memory, h.io));
+  // A point recorded before the disk baseline formed carries no io value.
+  // Zero is the right stand-in here and only here, because the line is a
+  // maximum: an unknown cannot be the worst of three without inventing it.
+  const stall = line(h => Math.max(h.cpu, h.memory, h.io ?? 0));
 
   svg.innerHTML =
     `<polygon points="0,100 ${util} 200,100" fill="${ink('--plot-fill')}" />` +

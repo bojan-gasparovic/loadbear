@@ -21,6 +21,7 @@ use loadbear_core::{
     classify, diagnose, evaluate, Assessment, ContainerReading, CpuReading, Reading, Resource,
     SpecDb, ThrottleState, Tier, TierReason, TierTracker, VerdictKind,
 };
+use loadbear_sensors_windows::baseline::DiskBaseline;
 use loadbear_sensors_windows::counters::{to_stall, total_physical_mb, Counters, SampleWindow};
 use loadbear_sensors_windows::cpuid::{brand_string, current_cpu_key};
 use loadbear_sensors_windows::docker;
@@ -53,6 +54,11 @@ const PROCESS_EVERY: u32 = 4;
 /// Record a graph point every Nth tick, so five minutes still fits.
 const HISTORY_EVERY: u32 = 2;
 
+/// Write the learned disk baseline out every Nth tick, so roughly once a
+/// minute. Losing a minute of learning to a crash costs a minute of
+/// relearning, which does not justify writing a file twice a second.
+const BASELINE_SAVE_EVERY: u32 = 120;
+
 #[derive(Debug, Clone, Serialize)]
 struct VerdictView {
     kind: String,
@@ -78,7 +84,9 @@ struct HistoryPoint {
     utilization: f32,
     cpu: f32,
     memory: f32,
-    io: f32,
+    /// Absent for any point recorded before this machine's disk baseline had
+    /// formed, so the graph does not draw a flat floor and call it quiet.
+    io: Option<f32>,
     tier: u8,
 }
 
@@ -159,7 +167,10 @@ struct Status {
     disk_queue: f64,
     stall_cpu: f32,
     stall_memory: f32,
-    stall_io: f32,
+    /// Absent while the disk baseline is still being learned. The interface
+    /// says so rather than drawing an empty bar, which would read as a quiet
+    /// disk instead of an unanswered question.
+    stall_io: Option<f32>,
     verdicts: Vec<VerdictView>,
     /// Which resource drove the tier, as a bare word, or empty when nothing
     /// did. The interface uses it to head the contributor list with the thing
@@ -210,7 +221,7 @@ impl Default for Status {
             disk_queue: 0.0,
             stall_cpu: 0.0,
             stall_memory: 0.0,
-            stall_io: 0.0,
+            stall_io: None,
             verdicts: vec![],
             driver: String::new(),
             reason: "Starting up.".into(),
@@ -849,6 +860,13 @@ fn main() {
                 let mut tick: u32 = 0;
                 let mut processes = Vec::new();
 
+                // What this disk normally does, carried over from previous
+                // runs. Disk latency is the one stall signal with no vendor
+                // guarantee and no hardware bit behind it, so it is measured
+                // against the machine's own history instead of a constant that
+                // would be blind on NVMe and deafening on a mechanical disk.
+                let mut disk_baseline = DiskBaseline::load();
+
                 loop {
                     let Ok(raw) = counters.sample(SAMPLE_INTERVAL) else {
                         continue;
@@ -857,6 +875,20 @@ fn main() {
                     window.push(raw);
                     let sample = window.average().unwrap_or(raw);
                     let judged = window.median().unwrap_or(raw);
+
+                    // The raw sample, not either reduction. A median of an
+                    // averaging window is already smoothed, and what the
+                    // baseline wants is what the disk actually did. `observe`
+                    // rejects anything that was not quiet with real traffic.
+                    disk_baseline.observe(&raw);
+                    let disk_saturation = disk_baseline.saturation_point();
+
+                    // Written back rarely. Losing a minute of learning to a
+                    // crash costs a minute of relearning, and writing a file
+                    // twice a second for that would be absurd.
+                    if tick % BASELINE_SAVE_EVERY == 0 {
+                        disk_baseline.save_if_changed();
+                    }
 
                     if REPROBE.swap(false, Ordering::Relaxed) || reader.is_none() {
                         reader = TemperatureReader::open().ok();
@@ -908,7 +940,7 @@ fn main() {
                     let now = now_ms();
                     let reading = Reading {
                         timestamp_ms: now,
-                        stall: to_stall(&judged, logical),
+                        stall: to_stall(&judged, logical, disk_saturation),
                         cpu: CpuReading {
                             all_core_mhz: judged.actual_mhz(),
                             // The machine's own base clock, cross-checked
@@ -961,7 +993,7 @@ fn main() {
                     // either reduction, because the point of it is to show the
                     // real shape of the last few minutes, spikes included, next
                     // to a tier that deliberately ignores them.
-                    let displayed = to_stall(&sample, logical);
+                    let displayed = to_stall(&sample, logical, disk_saturation);
                     if tick % HISTORY_EVERY == 0 {
                         history.push_back(HistoryPoint {
                             utilization: raw.processor_time_pct as f32,

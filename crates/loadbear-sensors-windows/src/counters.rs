@@ -370,39 +370,45 @@ pub mod scale {
     /// access. It still wants calibrating against a machine that is actually
     /// paging itself to death, which this one was not.
     pub const PAGES_INPUT_SATURATED: f64 = 20_000.0;
-    /// Seconds per disk transfer at which I/O stall is treated as saturated.
+    /// There is deliberately no disk latency constant here any more.
     ///
-    /// **This one cannot be a constant at all, and the measurement says so.**
-    /// With four threads reading files continuously on 2026-08-15, latency on
-    /// this machine peaked at 3.4 ms and normally sat between 0.1 and 0.9,
-    /// giving a normalized stall that never left single digits under a load
-    /// deliberately designed to saturate the disk. The figure below is a
-    /// spinning disk number and this machine has NVMe.
+    /// There used to be, at 50 ms per transfer, and it was a spinning disk
+    /// figure on a machine with NVMe. With four threads reading files
+    /// continuously on 2026-08-15, latency peaked at 3.4 ms and normally sat
+    /// between 0.1 and 0.9, so the normalised bar never left single digits
+    /// under a load deliberately built to saturate the disk. That is not a
+    /// noisy signal. It is one that could not move.
     ///
-    /// There is no value that works for every machine. Twenty milliseconds is
-    /// ordinary on a mechanical disk, five on a SATA SSD, half of one on NVMe,
-    /// so a fixed threshold is either blind on fast storage or screaming on
-    /// slow storage. Unlike clock and temperature there is no vendor guarantee
-    /// and no hardware bit to appeal to.
-    ///
-    /// DESIGN names the remaining source: the machine's own history. This wants
-    /// a baseline learned from the machine when it is idle, which needs the
-    /// sample store. Until that exists the interface shows the measured
-    /// latency itself, which is meaningful, and treats the normalized bar as
-    /// the weak signal it is. See LB-20.
-    pub const DISK_LATENCY_SATURATED: f64 = 0.050;
+    /// No value works everywhere. Twenty milliseconds is ordinary on a
+    /// mechanical disk, five on a SATA SSD, half of one on NVMe, so a fixed
+    /// threshold is either blind on fast storage or screaming on slow storage,
+    /// and unlike clock and temperature there is no vendor guarantee and no
+    /// hardware bit to appeal to. The saturation point now comes from the
+    /// machine's own history, which is `crate::baseline`. See LB-20.
+    pub const _DISK_LATENCY_IS_LEARNED_NOT_DECLARED: () = ();
 }
 
 /// Convert a sample into a normalized stall signal.
 ///
 /// `logical_cpus` scales the run queue: a queue of four on a sixteen thread
 /// machine is not the same pressure as a queue of four on a dual core.
-pub fn to_stall(s: &CounterSample, logical_cpus: u32) -> loadbear_core::StallSignal {
+///
+/// `disk_saturation` is the latency in seconds at which this machine's disk
+/// counts as fully stalled, learned by `crate::baseline::DiskBaseline` from
+/// the machine's own quiet behaviour. `None` while it is still being learned,
+/// and the io signal is then absent rather than invented.
+pub fn to_stall(
+    s: &CounterSample,
+    logical_cpus: u32,
+    disk_saturation: Option<f64>,
+) -> loadbear_core::StallSignal {
     let cpus = logical_cpus.max(1) as f64;
     loadbear_core::StallSignal {
         cpu: (s.processor_queue_length / cpus).clamp(0.0, 1.0) as f32,
         memory: (s.pages_input_per_sec / scale::PAGES_INPUT_SATURATED).clamp(0.0, 1.0) as f32,
-        io: (s.disk_seconds_per_transfer / scale::DISK_LATENCY_SATURATED).clamp(0.0, 1.0) as f32,
+        io: disk_saturation
+            .filter(|p| *p > 0.0)
+            .map(|p| (s.disk_seconds_per_transfer / p).clamp(0.0, 1.0) as f32),
     }
 }
 
@@ -430,13 +436,59 @@ mod tests {
         assert_eq!(s.actual_mhz(), None);
     }
 
+    /// A learned saturation point, standing in for what `DiskBaseline` would
+    /// supply. 3 ms is roughly this machine's, being ten times a 0.3 ms median.
+    const LEARNED: Option<f64> = Some(0.003);
+
     #[test]
     fn a_quiet_machine_produces_no_stall() {
         let s = CounterSample::default();
-        let stall = to_stall(&s, 16);
+        let stall = to_stall(&s, 16, LEARNED);
         assert_eq!(stall.cpu, 0.0);
         assert_eq!(stall.memory, 0.0);
-        assert_eq!(stall.io, 0.0);
+        assert_eq!(stall.io, Some(0.0));
+    }
+
+    #[test]
+    fn without_a_learned_baseline_the_disk_says_nothing_rather_than_zero() {
+        // Zero would read as a quiet disk. The truth is that nobody has
+        // established yet what quiet means on this machine, and the two are
+        // different answers.
+        let s = CounterSample {
+            disk_seconds_per_transfer: 0.004,
+            ..Default::default()
+        };
+        assert_eq!(to_stall(&s, 16, None).io, None);
+    }
+
+    #[test]
+    fn a_nonsense_baseline_is_refused_rather_than_dividing_by_it() {
+        let s = CounterSample {
+            disk_seconds_per_transfer: 0.004,
+            ..Default::default()
+        };
+        assert_eq!(to_stall(&s, 16, Some(0.0)).io, None);
+    }
+
+    #[test]
+    fn the_measured_nvme_load_now_moves_the_bar() {
+        // The bug LB-20 existed for. Against the old fixed 50 ms constant, the
+        // 3.4 ms peak of a load built to saturate this disk scored 0.068 and
+        // the bar could not leave single digits.
+        let s = CounterSample {
+            disk_seconds_per_transfer: 0.0034,
+            ..Default::default()
+        };
+        let io = to_stall(&s, 16, LEARNED).io.expect("a baseline was supplied");
+        assert!(io > 0.5, "the saturating load must register, got {io}");
+
+        // What the removed constant scored on the same measurement, kept as a
+        // figure rather than a claim so the size of the fault stays visible.
+        let against_the_old_constant = s.disk_seconds_per_transfer / 0.050;
+        assert!(
+            against_the_old_constant < 0.07,
+            "the old constant scored {against_the_old_constant}, which is the bug"
+        );
     }
 
     #[test]
@@ -445,8 +497,8 @@ mod tests {
             processor_queue_length: 8.0,
             ..Default::default()
         };
-        assert_eq!(to_stall(&s, 16).cpu, 0.5);
-        assert_eq!(to_stall(&s, 8).cpu, 1.0);
+        assert_eq!(to_stall(&s, 16, LEARNED).cpu, 0.5);
+        assert_eq!(to_stall(&s, 8, LEARNED).cpu, 1.0);
     }
 
     #[test]
@@ -457,10 +509,10 @@ mod tests {
             disk_seconds_per_transfer: 10.0,
             ..Default::default()
         };
-        let stall = to_stall(&s, 16);
+        let stall = to_stall(&s, 16, LEARNED);
         assert_eq!(stall.cpu, 1.0);
         assert_eq!(stall.memory, 1.0);
-        assert_eq!(stall.io, 1.0);
+        assert_eq!(stall.io, Some(1.0));
     }
 
     fn sample_with_queue(queue: f64) -> CounterSample {
@@ -540,7 +592,7 @@ mod tests {
         w.push(sample_with_queue(0.0));
         w.push(sample_with_queue(0.0));
         assert_eq!(w.median().unwrap().processor_queue_length, 24.0);
-        assert_eq!(to_stall(&w.median().unwrap(), 16).cpu, 1.0);
+        assert_eq!(to_stall(&w.median().unwrap(), 16, LEARNED).cpu, 1.0);
     }
 
     #[test]
@@ -551,7 +603,7 @@ mod tests {
             pages_input_per_sec: 12_513.0,
             ..Default::default()
         };
-        let stall = to_stall(&s, 16);
+        let stall = to_stall(&s, 16, LEARNED);
         assert!(
             stall.memory < 0.80,
             "a routine burst of file reading must not reach the out of spec threshold, got {}",
@@ -565,7 +617,7 @@ mod tests {
             pages_input_per_sec: 40_000.0,
             ..Default::default()
         };
-        assert_eq!(to_stall(&s, 16).memory, 1.0);
+        assert_eq!(to_stall(&s, 16, LEARNED).memory, 1.0);
     }
 
     #[test]
@@ -579,7 +631,7 @@ mod tests {
         }
         let averaged = w.average().unwrap();
         assert_eq!(averaged.processor_queue_length, 7.5);
-        assert!(to_stall(&averaged, 16).cpu < to_stall(&sample_with_queue(30.0), 16).cpu);
+        assert!(to_stall(&averaged, 16, LEARNED).cpu < to_stall(&sample_with_queue(30.0), 16, LEARNED).cpu);
     }
 
     #[test]

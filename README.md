@@ -30,6 +30,7 @@ The distinction LoadBear is built around:
 ## What it does
 
 - **Measures stall rather than utilization.** Stall is time that work spent waiting on a resource instead of progressing, reported for the processor, memory and disk.
+- **Learns what your disk normally does.** There is no threshold that fits both a mechanical disk and an NVMe, so LoadBear does not invent one. It watches your disk while it is unhurried, and calls it stalled when it is answering an order of magnitude slower than its own normal. Until it has watched enough, it says so rather than drawing an empty bar.
 - **Names what is responsible.** Process groups carry the name a person would use rather than the executable, and Docker containers are resolved through the engine API. This is the part that separates it from Task Manager: "you are overloaded" is something you already knew by the time you looked.
 - **Judges against published limits.** Every finding carries the authority its threshold rests on, so you can check it.
 - **Waits before it panics.** A condition has to hold before the state escalates, so a two second spike does not turn the bear red.
@@ -127,7 +128,6 @@ Stated plainly, because a monitor that overstates what it knows is worse than no
 
 - **Windows only.** The core diagnosis crate makes no operating system call and is written for three platforms, but only the Windows backend exists.
 - **The throttle verdict never fires.** The check is written and tested. No register source has been found that meets the rule the sensor crate holds itself to, which is that nothing is derived from a forum post.
-- **Disk stall reads low on an SSD.** It is scaled against 50 ms per transfer, which is a mechanical disk figure. Measured against a load built to saturate it, an NVMe peaked at 3.4 ms, so that bar cannot leave single digits. The measured latency is shown regardless, and is the number worth reading.
 - **Intel temperature is unverified.** It is written, wired and unit tested, and no value in it has yet been read off an Intel part, because it was written on an AMD machine. It fails closed rather than guessing.
 - **A container's CPU reads zero.** Its memory is exact. The engine's one-shot statistics ship no baseline to difference against.
 - **The bear is a placeholder.** It is a crude silhouette awaiting an illustrator.

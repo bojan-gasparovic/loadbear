@@ -18,7 +18,19 @@ pub enum Resource {
 pub struct StallSignal {
     pub cpu: f32,
     pub memory: f32,
-    pub io: f32,
+    /// Absent until the machine has said what its own disk normally does.
+    ///
+    /// Every other signal here normalises against something fixed. This one
+    /// cannot: twenty milliseconds per transfer is ordinary on a mechanical
+    /// disk, five on a SATA SSD, half of one on NVMe, so any constant is either
+    /// blind on fast storage or screaming on slow storage. There is no vendor
+    /// guarantee and no hardware bit to appeal to, which leaves the machine's
+    /// own history, and history takes time to collect.
+    ///
+    /// `None` means not yet known, and it is treated the same way an absent
+    /// temperature is: reported as unavailable rather than filled in with a
+    /// number nothing stands behind.
+    pub io: Option<f32>,
 }
 
 impl StallSignal {
@@ -26,13 +38,19 @@ impl StallSignal {
     ///
     /// Ties resolve in the order cpu, memory, io, which makes the result
     /// deterministic. The ordering carries no meaning beyond that.
+    ///
+    /// An unknown io signal does not compete. A disk with no baseline yet is
+    /// not a quiet disk, and letting it stand in as zero would be the guess
+    /// this type exists to avoid.
     pub fn worst(&self) -> (Resource, f32) {
         let mut worst = (Resource::Cpu, self.cpu);
         if self.memory > worst.1 {
             worst = (Resource::Memory, self.memory);
         }
-        if self.io > worst.1 {
-            worst = (Resource::Io, self.io);
+        if let Some(io) = self.io {
+            if io > worst.1 {
+                worst = (Resource::Io, io);
+            }
         }
         worst
     }
@@ -153,7 +171,7 @@ mod tests {
         let stall = StallSignal {
             cpu: 0.10,
             memory: 0.72,
-            io: 0.31,
+            io: Some(0.31),
         };
         assert_eq!(stall.worst(), (Resource::Memory, 0.72));
     }
@@ -163,7 +181,7 @@ mod tests {
         let stall = StallSignal {
             cpu: 0.0,
             memory: 0.0,
-            io: 0.0,
+            io: Some(0.0),
         };
         assert_eq!(stall.worst(), (Resource::Cpu, 0.0));
     }

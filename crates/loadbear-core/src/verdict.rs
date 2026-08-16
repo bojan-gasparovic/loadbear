@@ -279,7 +279,7 @@ mod tests {
             stall: StallSignal {
                 cpu: 0.0,
                 memory: 0.0,
-                io: 0.0,
+                io: Some(0.0),
             },
             cpu,
             processes: vec![],

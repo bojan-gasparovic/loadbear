@@ -15,6 +15,7 @@ use loadbear_core::{
 };
 use loadbear_sensors_windows::counters::{to_stall, CounterSample, Counters, SampleWindow};
 use loadbear_sensors_windows::cpuid::{brand_string, current_cpu_key};
+use loadbear_sensors_windows::baseline::DiskBaseline;
 use loadbear_sensors_windows::pawnio::{PawnIo, PawnIoError};
 use loadbear_sensors_windows::processes::ProcessSampler;
 use loadbear_sensors_windows::shared::now_ms;
@@ -63,7 +64,10 @@ fn main() {
 
         let reading = Reading {
             timestamp_ms: 0,
-            stall: to_stall(&sample, logical),
+            // Read only. A diagnostic that taught the store would
+            // teach it from whatever the machine was doing while somebody
+            // ran a diagnostic, which is not a quiet baseline.
+            stall: to_stall(&sample, logical, DiskBaseline::load().saturation_point()),
             cpu: CpuReading {
                 all_core_mhz: sample.actual_mhz(),
                 reported_base_mhz: reported_base_mhz(
@@ -175,12 +179,21 @@ fn render(
         (None, _) => println!("  Clock      unavailable"),
     }
 
-    println!(
-        "  Stall      cpu {:>3}%   memory {:>3}%   io {:>3}%",
-        (reading.stall.cpu * 100.0).round(),
-        (reading.stall.memory * 100.0).round(),
-        (reading.stall.io * 100.0).round()
-    );
+    match reading.stall.io {
+        Some(io) => println!(
+            "  Stall      cpu {:>3}%   memory {:>3}%   io {:>3}%",
+            (reading.stall.cpu * 100.0).round(),
+            (reading.stall.memory * 100.0).round(),
+            (io * 100.0).round()
+        ),
+        // Absent rather than zero. A disk with no learned baseline is not a
+        // disk with nothing to do, and printing 0% would say it was.
+        None => println!(
+            "  Stall      cpu {:>3}%   memory {:>3}%   io   still learning this disk",
+            (reading.stall.cpu * 100.0).round(),
+            (reading.stall.memory * 100.0).round()
+        ),
+    }
     println!(
         "  Queue      {:.1} threads waiting across {logical} logical processors",
         sample.processor_queue_length

@@ -10,6 +10,7 @@ description = "Windows sensor backend for LoadBear. The only crate permitted to 
 [dependencies]
 loadbear-core = { path = "../loadbear-core" }
 libloading = "0.9.0"
+serde_json = { workspace = true }
 thiserror = { workspace = true }
 raw-cpuid = { workspace = true }
 windows-service = "0.8.1"

@@ -61,7 +61,9 @@ fn a_machine_pinned_by_this_test_attributes_the_load_to_this_test() {
         let processes = sampler.sample(tick * 1000);
         reading = Some(Reading {
             timestamp_ms: tick * 1000,
-            stall: to_stall(&sample, logical as u32),
+            // No learned disk baseline in a test run, and none needed: this
+            // exercises attribution, which is driven by cpu and memory.
+            stall: to_stall(&sample, logical as u32, None),
             cpu: CpuReading {
                 all_core_mhz: sample.actual_mhz(),
                 reported_base_mhz: None,
@@ -132,7 +134,7 @@ fn an_unloaded_machine_is_not_forced_into_naming_something() {
         stall: StallSignal {
             cpu: 0.0,
             memory: 0.0,
-            io: 0.0,
+            io: Some(0.0),
         },
         cpu: CpuReading {
             all_core_mhz: sample.actual_mhz(),

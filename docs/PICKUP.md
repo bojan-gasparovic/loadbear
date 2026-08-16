@@ -40,7 +40,7 @@ between a repository and a product.
 
 ## Where it got to
 
-It runs and it is used daily. **210 tests**, clippy clean.
+It runs and it is used daily. **223 tests**, clippy clean.
 
 ```
 cd context-library/desktop-apps/loadbear
@@ -221,7 +221,30 @@ which is why the old Start here section described them as missing.
   shipped, and changed nothing. Read the window library's source before
   believing a flag setter does anything.
 
-  **Confirmed working by Bojan, 2026-08-16.** Whether a 12px number in a coloured 19px
+  **Confirmed working by Bojan, 2026-08-16.**
+- **LB-20: disk stall is learned from the machine, not declared.** The 50 ms
+  constant was a mechanical disk figure and this machine has NVMe, so the bar
+  could not leave single digits under a load built to saturate the disk.
+  `baseline::DiskBaseline` keeps a 512 sample sliding window of latencies
+  observed while the disk was unhurried, in
+  `%LOCALAPPDATA%\LoadBear\disk-baseline.json`, and saturation is ten times
+  the median of that.
+
+  **Measured on this machine after the change:** median 0.428 ms, saturation
+  4.28 ms, so the 3.4 ms peak recorded on 2026-08-15 now scores about 80
+  percent where it scored 6.8. The learned median lands inside the 0.1 to 0.9 ms
+  range recorded that day, which is the check that it is learning the right
+  thing.
+
+  A sample teaches it only when a transfer actually completed and the queue was
+  at or below one. Zero latency means nothing completed, and a backed up queue
+  is the thing the baseline exists to be compared against.
+
+  **`StallSignal.io` is now `Option<f32>`.** It does not compete in `worst()`
+  while unknown, and the interface draws a hatched track reading "learning"
+  rather than an empty bar, which would read as a disk with nothing to do. The
+  ten times ratio is the one chosen number left and is documented as chosen. It
+  moves the tier and never a verdict. Whether a 12px number in a coloured 19px
   tile reads at a glance, and whether clicking the taskbar raises it above the
   strip, are the two things that decide whether the shape works at all.
 
@@ -280,9 +303,6 @@ Roughly in the order I would pick it up.
 3. **LB-21 second half: the throttle verdict never fires.** The check is
    written and tested. No register source has been found that meets the
    provenance rule.
-4. **LB-20: disk stall is scaled at 50 ms per transfer**, a mechanical disk
-   figure. An NVMe under a load built to saturate it peaked at 3.4 ms, so that
-   bar cannot leave single digits.
 5. **`docs/DESIGN.md`** still describes the cancelled notification gate.
 6. **Docker CPU always reads zero.** `one-shot=true` ships no `precpu_stats`
    baseline. Memory is exact.
