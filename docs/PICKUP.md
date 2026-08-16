@@ -24,7 +24,7 @@ between a repository and a product.
 It runs, it is used daily, and it is pushed. **202 tests**, clippy clean.
 
 ```
-cd context-library/hobby-projects/loadbear
+cd context-library/desktop-apps/loadbear
 cargo build --release
 target\release\loadbear-app.exe
 ```
