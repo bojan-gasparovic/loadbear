@@ -22,6 +22,7 @@ pub mod mapping;
 pub mod pawnio;
 pub mod pm_table;
 pub mod power;
+pub mod presentation;
 pub mod processes;
 pub mod service_control;
 pub mod shared;

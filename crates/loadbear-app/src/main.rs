@@ -26,6 +26,7 @@ use loadbear_sensors_windows::cpuid::{brand_string, current_cpu_key};
 use loadbear_sensors_windows::docker;
 use loadbear_sensors_windows::installer;
 use loadbear_sensors_windows::mapping::TemperatureReader;
+use loadbear_sensors_windows::presentation;
 use loadbear_sensors_windows::processes::ProcessSampler;
 use loadbear_sensors_windows::service_control;
 use loadbear_sensors_windows::shared::{now_ms, SharedTemperature};
@@ -318,6 +319,51 @@ const COLLAPSED_SIZE: (f64, f64) = (900.0, 124.0);
 /// input queues, so a stall here could stall the shell.
 const TASKBAR_SIZE: (f64, f64) = (360.0, 48.0);
 
+/// Whether the window is currently the taskbar strip.
+///
+/// Read by the thread below, written by `set_mode`. An atomic rather than a
+/// channel because there is exactly one bit of state and one reader.
+static ON_THE_TASKBAR: AtomicBool = AtomicBool::new(false);
+
+/// How often the strip reclaims its place at the top of the topmost band.
+///
+/// Fast enough that a person clicking the clock does not lose sight of the
+/// temperatures, slow enough to be free. `SetWindowPos` with no move, no
+/// resize and no activate is a few microseconds.
+const RECLAIM_INTERVAL: Duration = Duration::from_millis(400);
+
+/// Keep the strip above the taskbar, which will not stay under it.
+///
+/// `alwaysOnTop` is set and is not enough. Topmost is a band, not a position,
+/// and inside it ordinary z-order applies. The taskbar is topmost too, and
+/// Explorer raises it whenever a person touches it, which puts it in front of
+/// a strip sitting on top of it. No arrangement of window flags wins that. The
+/// only answer is to raise again.
+///
+/// **Not `set_always_on_top(true)`**, which was tried first and does nothing at
+/// all here. Tao computes the difference between the old flags and the new ones
+/// and returns early when there is none, so calling it on a window that is
+/// already topmost issues no `SetWindowPos` whatsoever. The raise has to be
+/// made directly, which is what `presentation::raise_to_the_front` does.
+///
+/// Only while the strip is the shape on screen. In the other two shapes this
+/// would be fighting the user for the foreground over a window they can move
+/// out of the way themselves.
+///
+/// And never over something full screen. Raising three times a second is
+/// precisely what nobody wants over a game, a video or a shared screen: a 48px
+/// bar that will not go away and cannot be clicked past.
+/// `should_stay_out_of_the_way` asks the shell the same question it asks before
+/// showing a notification, which is the right precedent for a monitor.
+fn reclaim_the_top(hwnd: isize) {
+    std::thread::spawn(move || loop {
+        if ON_THE_TASKBAR.load(Ordering::Relaxed) && !presentation::should_stay_out_of_the_way() {
+            presentation::raise_to_the_front(hwnd);
+        }
+        std::thread::sleep(RECLAIM_INTERVAL);
+    });
+}
+
 /// The shape a mode names, or nothing if it names no mode at all.
 ///
 /// Returning an `Option` rather than falling back to expanded is deliberate. A
@@ -350,7 +396,19 @@ fn set_mode(window: tauri::Window, mode: String) -> Result<(), String> {
     let (width, height) = size_for_mode(&mode).ok_or_else(|| format!("no such mode: {mode}"))?;
     window
         .set_size(tauri::LogicalSize::new(width, height))
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+
+    // Only the strip fights the taskbar for the top of the topmost band, and
+    // only the strip is meant to. Raising it once here means it wins the moment
+    // it appears rather than at the next tick.
+    let strip = mode == "taskbar";
+    ON_THE_TASKBAR.store(strip, Ordering::Relaxed);
+    if strip {
+        if let Ok(hwnd) = window.hwnd() {
+            presentation::raise_to_the_front(hwnd.0 as isize);
+        }
+    }
+    Ok(())
 }
 
 /// Minimise, from the page's own caption buttons.
@@ -712,6 +770,16 @@ fn main() {
                 (app.get_webview_window("main"), window_icon(Tier::Easy))
             {
                 let _ = w.set_icon(icon);
+            }
+
+            // Idle until the strip is asked for, then keeps it above a taskbar
+            // that raises itself every time a person touches it. The handle is
+            // taken once, since it is fixed for the life of the window and
+            // taking it per tick would be work for nothing.
+            if let Some(w) = app.get_webview_window("main") {
+                if let Ok(hwnd) = w.hwnd() {
+                    reclaim_the_top(hwnd.0 as isize);
+                }
             }
 
             let shared = shared.clone();

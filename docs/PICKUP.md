@@ -27,7 +27,7 @@ between a repository and a product.
 
 ## Where it got to
 
-It runs and it is used daily. **206 tests**, clippy clean.
+It runs and it is used daily. **210 tests**, clippy clean.
 
 ```
 cd context-library/desktop-apps/loadbear
@@ -35,10 +35,16 @@ cargo build --release
 target\release\loadbear-app.exe
 ```
 
-**Neither repository is pushed.** As of the end of the fourth session this one
-is four commits ahead of `origin/main` and zeroemdashes is three. Check the
-remotes rather than local refs before repeating either number, which is the
-mistake that cost most of an earlier session.
+**Both repositories were pushed on 2026-08-16**, after the history rewrite
+described below. Check the remotes rather than local refs before repeating
+either number, which is the mistake that cost most of an earlier session.
+
+**LoadBear's history was rewritten that day.** `git filter-repo` removed the
+vendored PawnIO installer from all 73 commits, so every hash from the point it
+was added onward changed and the branch was force pushed. Old zeroemdashes
+commits still name LoadBear commits that no longer exist, so checking one out
+and running `git submodule update` will fail. A backup bundle was taken first
+and lives in the session scratchpad.
 
 | Crate | Role |
 |---|---|
@@ -188,7 +194,21 @@ which is why the old Start here section described them as missing.
   `#tb-strip` goes to the taskbar shape, and `#tb-restore` inside the strip is
   the only way back out of it, since the strip hides the title bar.
 
-  **Bojan has not judged the strip itself yet.** Whether a 12px number in a coloured 19px
+  **The taskbar came out in front of it, and that is fixed.** Topmost is a
+  band, not a position, and Explorer raises the taskbar inside that band on
+  every touch. `presentation::raise_to_the_front` issues
+  `SetWindowPos(HWND_TOPMOST, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)` every
+  400 ms while the strip is on screen. It stands down over anything full
+  screen, since raising three times a second over a game is a 48px bar that
+  cannot be dismissed.
+
+  **`Window::set_always_on_top(true)` is a no-op when the window is already
+  always on top.** Tao's `apply_diff` computes `self ^ new` and returns early
+  on an empty difference, so no `SetWindowPos` is issued. The first fix used it,
+  shipped, and changed nothing. Read the window library's source before
+  believing a flag setter does anything.
+
+  **Confirmed working by Bojan, 2026-08-16.** Whether a 12px number in a coloured 19px
   tile reads at a glance, and whether clicking the taskbar raises it above the
   strip, are the two things that decide whether the shape works at all.
 

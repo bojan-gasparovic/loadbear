@@ -248,7 +248,7 @@ The degree symbol goes with the label. Eight coloured numbers in a grid beside a
 
 Neither title bar control is reachable from the strip, which hides the bar they live in.
 
-- [ ] **Step 5: Verify by running it**
+- [x] **Step 5: Verify by running it**
 
 `cargo build --release` then `target\release\loadbear-app.exe`, with the app not already running because Windows holds the exe open.
 
@@ -262,7 +262,17 @@ Bojan does the looking. He cycles to taskbar mode, drags the strip over his task
 
 ## Known risks, in the order they are likely to bite
 
-1. **Clicking the taskbar may cover the strip.** Both windows are topmost, and within that band ordinary z-order applies, so explorer raising the taskbar can put it in front. Unknown until Task 2 Step 5. If it happens, the fix is to re-assert `HWND_TOPMOST` on a shell hook or a timer, which is native code this plan deliberately does not have, and at that point reparenting deserves a second look.
+1. ~~**Clicking the taskbar may cover the strip.**~~ **It did, on the first run, exactly as predicted. Fixed 2026-08-16 and confirmed working.**
+
+   The fix is the timer the risk named, and it needed one line of native code rather than reparenting. `presentation::raise_to_the_front` issues `SetWindowPos(HWND_TOPMOST, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)` every 400 ms while the strip is the shape on screen, and once on entering it.
+
+   **Two things were learned the hard way and are worth not relearning.**
+
+   `Window::set_always_on_top(true)` does nothing when the window is already always on top. Tao's `apply_diff` computes `self ^ new` and returns early on an empty difference, so no `SetWindowPos` is issued at all. The first attempt at this fix used it, shipped, and changed nothing whatsoever. Read `tao-0.35.3/src/platform_impl/windows/window_state.rs` before assuming any window flag setter does something.
+
+   The band question was settled by measurement rather than by argument. A raw `SetWindowPos(HWND_TOPMOST)` from PowerShell, followed by a walk of the visible z-order, put LoadBear at position 2 against the taskbar's 3. So an ordinary topmost window does beat the Windows 11 taskbar, and none of the `SetWindowBand` or `uiAccess` machinery is needed.
+
+   **The strip stands down over anything full screen**, which the timer made necessary. Raising three times a second over a game or a shared screen is a 48px bar that cannot be dismissed. `SHQueryUserNotificationState` is the question, and it is the same one the shell asks before showing a notification.
 2. **12px numbers may be unreadable.** Fallbacks are listed above under Target shape.
 3. **Position is not remembered.** The strip must be dragged back after every launch. Deliberate for now.
 4. **Fullscreen applications hide the taskbar and will not hide the strip.** A topmost 360x48 strip will sit over a game or a video. Not handled in this plan. If it matters, the detection is `SHQueryUserNotificationState` returning a fullscreen state, and the response is to hide.
