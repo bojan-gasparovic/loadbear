@@ -29,11 +29,16 @@ pointing at it goes stale. The built file is `LoadBear_<version>_x64-setup.exe`,
 so renaming on upload is a release step rather than a slip.
 
 **The consequence is that the README hash has to be regenerated on every
-release**, since the URL cannot say which version it is serving. Built 0.1.0 is
-2,109,777 bytes,
-`a6a6dbad4d93f29b2cc6ead437d85370199b0363bfc2386a3221a6e0bf45875c`. A stale
-hash against a fresh upload does not read as an out of date document. It reads
-as a tampered download, because that is what the check exists to detect.
+release**, since the URL cannot say which version it is serving. **This has
+already bitten once**: the first 0.1.0 installer was built and hashed before the
+taskbar topmost fix and the learned disk baseline landed, so the published hash
+described a binary nobody would ever download. Rebuilt 2026-08-17, now
+2,115,247 bytes,
+`4d4978364d54d52bf6990cbd760e54b7e47bb58056e62b10d27e9f14599cee74`.
+
+A stale hash against a fresh upload does not read as an out of date document. It
+reads as a tampered download, because that is what the check exists to detect.
+**Build the installer last, hash it, then push, in that order.**
 
 Everything else on the list is a quality gap. This one is the difference
 between a repository and a product.

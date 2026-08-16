@@ -62,7 +62,7 @@ Windows 10 or 11 on x86-64.
 
 | Version | 0.1.0 |
 |---|---|
-| SHA-256 | `a6a6dbad4d93f29b2cc6ead437d85370199b0363bfc2386a3221a6e0bf45875c` |
+| SHA-256 | `4d4978364d54d52bf6990cbd760e54b7e47bb58056e62b10d27e9f14599cee74` |
 
 **The installer is not code signed.** SmartScreen will say the publisher is unknown. Choose "More info", then "Run anyway". If you would rather check first, the hash above is what the file should be, and this is how to ask your own machine:
 
