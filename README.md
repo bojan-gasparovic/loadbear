@@ -10,6 +10,12 @@ It also folds to a strip that can sit on top of everything else without covering
 
 ![LoadBear collapsed to a strip](docs/images/loadbear-strip.png)
 
+And it folds once more, to 360 by 48, which is the height of the Windows 11 taskbar. Drag it onto the taskbar and leave it there. The bear, five minutes of history, and every core's temperature, in the space beside your clock.
+
+![LoadBear as a strip on the taskbar](docs/images/loadbear-taskbar.png)
+
+Nothing is embedded into the taskbar, because Windows has not allowed that since deskbands were dropped. It is an ordinary window that happens to be the right size, and it holds its place: the taskbar raises itself whenever you touch it, so LoadBear raises itself back. It stops doing that over anything full screen, since a bar you cannot dismiss is worse than no bar.
+
 ## Why
 
 Developers run Docker containers, dev servers, builds, IDE indexers, browsers and increasingly local models, all at once. Machines get overloaded constantly, and the first sign is usually that everything feels slow. By then you are guessing at the cause.
