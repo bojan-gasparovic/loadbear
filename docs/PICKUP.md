@@ -1,20 +1,26 @@
 # Picking LoadBear back up
 
 Written 2026-08-14, rewritten 2026-08-16 at the end of the third working
-session. Read this before `DESIGN.md`, because several things in that spec were
-overtaken by what the machine actually did, and one whole section of it
-describes a feature that has since been cancelled.
+session, corrected the same day at the end of the fourth. Read this before
+`DESIGN.md`, because several things in that spec were overtaken by what the
+machine actually did, and one whole section of it describes a feature that has
+since been cancelled.
 
 ## Start here
 
-**The one thing standing between LoadBear and other people: nothing is
-installable.** `cargo tauri` is not installed, no bundle has ever been
-produced, and `tauri.conf.json`'s `bundle` block lists only icons. That last
-part matters more than the first two: `service_control::helper_path()` looks
-for `loadbear-service.exe` beside the running application, so a bundle built as
-configured today would install an app whose temperature and power are
-permanently dead, with a misleading message explaining why. The helper has to
-be added to the bundle as an external binary before a bundle is worth making.
+**LoadBear is now installable, and that is no longer the blocker.**
+`build-installer.ps1` builds the helper, stages it as a Tauri sidecar under the
+target triple, and bundles an NSIS installer to
+`target\release\bundle\nsis\LoadBear_<version>_x64-setup.exe`. The
+`externalBin` entry is what makes `service_control::helper_path()` find
+`loadbear-service.exe` beside the interface, so an installed copy reads
+temperature and power rather than reporting them permanently dead.
+
+**The blocker moved one step downstream. Nobody can get the installer.** The
+README tells people to download it from GitHub Releases. There are no releases
+and no tags, and the file lands under `target/`, which is gitignored, so it is
+in no repository either. The plan is to host it on zeroemdashes.com. That is
+LB-23, and it is Bojan's to do, since it is a publishing step.
 
 Everything else on the list is a quality gap. This one is the difference
 between a repository and a product.
@@ -133,6 +139,33 @@ This is what produced the `PowerBelowRating` verdict.
 - **Every LB ticket reconciled** with reality. The board had fourteen tickets
   sitting on `Now` that had been finished for days.
 
+## Done after this document was last rewritten
+
+The first two landed in the same session, after the rewrite above was written,
+which is why the old Start here section described them as missing.
+
+- **A collapsed window shape**, 900x124, and the page draws its own 28px title
+  bar so there is a chevron to reach it. `EXPANDED_SIZE` and `COLLAPSED_SIZE`
+  live at `loadbear-app/src/main.rs:296`. The mode is not remembered across
+  restarts and the window always opens expanded, deliberately.
+- **The installer**, plus an uninstaller that stops and removes the service
+  rather than leaving it registered. The uninstall path stops the service with
+  `sc.exe` and not with the old binary, because the binary it would have called
+  is one of the files being deleted.
+- **LB-19: `--dump-pmtable` is behind the `diagnostics` feature**, which is off
+  by default, so no shipped helper contains it. `pmtable.rs` is kept rather than
+  deleted, since mapping a PM table version other than `0x370005` needs exactly
+  this tool. Verified by building both ways and checking the binary: the module's
+  own output strings appear once with the feature and zero times without it.
+
+  ```
+  cargo run -p loadbear-service --features diagnostics -- --dump-pmtable
+  ```
+
+  **An already installed helper still has the old mode** until
+  `loadbear-service.exe --setup` is re-run elevated, which replaces the copy
+  under `%ProgramFiles%\LoadBear`.
+
 ## Decisions that should not be relitigated without reason
 
 - **Notifications are cancelled.** Bojan's call, 2026-08-16. LoadBear is a
@@ -169,6 +202,13 @@ This is what produced the `PowerBelowRating` verdict.
   Stop it first.
 - Changing `icon.ico` needs `cargo clean -p loadbear-app` to re-run the build
   script that embeds it.
+- **The debug `target/` held absolute paths from before the submodule moved**
+  out of `hobby-projects/`. `cargo test --workspace` failed with
+  `failed to read plugin permissions` naming a `hobby-projects\loadbear\target`
+  path that no longer exists. It is a stale cache and not a code fault.
+  `cargo clean -p tauri -p tauri-build -p loadbear-app` clears it, at the cost
+  of recompiling Tauri. Fixed 2026-08-16, so it should not recur, but the error
+  message points at a missing file rather than at the real cause.
 
 ## What is not done
 
@@ -176,30 +216,27 @@ Roughly in the order I would pick it up.
 
 1. **Nothing is installable.** See Start here. This is the only item that
    blocks other people entirely.
-2. **LB-19: `--dump-pmtable` still ships** in the helper. It dumps raw SMU
-   table contents from a process running as Local System. Its own title says
-   "before distribution".
-3. **LB-22: verify Intel temperature on Intel hardware.** Needs a machine
+2. **LB-22: verify Intel temperature on Intel hardware.** Needs a machine
    nobody here has.
-4. **LB-21 second half: the throttle verdict never fires.** The check is
+3. **LB-21 second half: the throttle verdict never fires.** The check is
    written and tested. No register source has been found that meets the
    provenance rule.
-5. **LB-20: disk stall is scaled at 50 ms per transfer**, a mechanical disk
+4. **LB-20: disk stall is scaled at 50 ms per transfer**, a mechanical disk
    figure. An NVMe under a load built to saturate it peaked at 3.4 ms, so that
    bar cannot leave single digits.
-6. **`docs/DESIGN.md`** still describes the cancelled notification gate.
-7. **Docker CPU always reads zero.** `one-shot=true` ships no `precpu_stats`
+5. **`docs/DESIGN.md`** still describes the cancelled notification gate.
+6. **Docker CPU always reads zero.** `one-shot=true` ships no `precpu_stats`
    baseline. Memory is exact.
-8. **Per-process hard faults.** Written but always returns nothing; Windows
+7. **Per-process hard faults.** Written but always returns nothing; Windows
    exposes no documented per-process hard fault rate. Needs ETW or stays
    silent.
-9. **The bear is a placeholder**, and the silhouettes have no outline, so they
+8. **The bear is a placeholder**, and the silhouettes have no outline, so they
    are at the mercy of whatever they sit on. The tier transitions have now been
    watched firing on real hardware over normal work, which the design said was
    the precondition for briefing an illustrator honestly.
-10. **The repository is still private.** The application footer links to it and
-    will 404 for anyone else until that changes.
-11. **macOS and Linux backends.** Designed for, not started.
+9. **The repository is still private.** The application footer links to it and
+   will 404 for anyone else until that changes.
+10. **macOS and Linux backends.** Designed for, not started.
 
 ## Smaller things noticed and left
 

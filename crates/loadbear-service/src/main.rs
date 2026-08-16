@@ -18,6 +18,7 @@
 //! writes a struct. No diagnosis, no interface, no network. Everything that
 //! could be a bug in privileged code lives somewhere unprivileged instead.
 
+#[cfg(feature = "diagnostics")]
 mod pmtable;
 
 use std::ffi::OsString;
@@ -65,6 +66,13 @@ fn main() -> Result<(), windows_service::Error> {
         std::process::exit(probe_power());
     }
 
+    // Behind the `diagnostics` feature, so no shipped helper carries it. This
+    // process runs as Local System and a raw hardware dump mode in a privileged
+    // binary is a larger surface than the product needs. Build it deliberately
+    // when a new PM table version has to be mapped:
+    //
+    //   cargo run -p loadbear-service --features diagnostics -- --dump-pmtable
+    #[cfg(feature = "diagnostics")]
     if std::env::args().any(|a| a == "--dump-pmtable") {
         std::process::exit(pmtable::dump());
     }

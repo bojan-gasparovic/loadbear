@@ -12,8 +12,17 @@
 //! specific and undocumented, so this dumps the raw floats and lets the values
 //! be matched against a known-good source rather than guessed at.
 //!
-//! This is diagnostic scaffolding, not product code. It runs only when the
-//! helper is invoked with `--dump-pmtable`.
+//! This is diagnostic scaffolding, not product code, and it is compiled only
+//! under the `diagnostics` feature, which is off by default. A helper built for
+//! distribution does not contain it at all:
+//!
+//! ```text
+//! cargo run -p loadbear-service --features diagnostics -- --dump-pmtable
+//! ```
+//!
+//! It survives rather than being deleted because widening per-core temperature
+//! beyond PM table version `0x370005` means dumping the table on a machine
+//! nobody here owns, and this is the tool that does it.
 
 use loadbear_sensors_windows::pawnio::PawnIo;
 

@@ -11,6 +11,21 @@ description = "LoadBear helper service. Reads hardware as Local System and publi
 name = "loadbear-service"
 path = "src/main.rs"
 
+[features]
+# Diagnostic scaffolding, kept out of every shipped helper.
+#
+# This is a privileged binary running as Local System, so a mode that dumps raw
+# SMU table contents is a larger surface than the product needs. It is not
+# deleted, because widening per-core temperature beyond PM table version
+# 0x370005 means dumping the table on a machine nobody here owns, and this is
+# the tool that does it.
+#
+#   cargo run -p loadbear-service --features diagnostics -- --dump-pmtable
+#
+# `build-installer.ps1` builds with default features, so the feature has to be
+# asked for by name before it exists in a binary.
+diagnostics = []
+
 [dependencies]
 loadbear-core = { path = "../loadbear-core" }
 loadbear-sensors-windows = { path = "../loadbear-sensors-windows" }
