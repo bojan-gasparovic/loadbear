@@ -1,0 +1,81 @@
+LoadBear
+Copyright 2026 Bojan Gasparovic
+
+Licensed under the Apache License, Version 2.0. See LICENSE.
+
+This product includes software developed by third parties. What follows is a
+complete account of what is redistributed here and what is not.
+
+
+================================================================================
+1. Redistributed: compiled PawnIO modules, LGPL-2.1
+================================================================================
+
+Files:
+
+  crates/loadbear-sensors-windows/modules/AMDFamily17.bin
+  crates/loadbear-sensors-windows/modules/IntelMSR.bin
+  crates/loadbear-sensors-windows/modules/RyzenSMU.bin
+
+These are compiled Pawn bytecode modules from the PawnIO.Modules project. They
+are loaded into the PawnIO driver at runtime to read hardware registers, and
+they are embedded into the LoadBear binaries that use them.
+
+  Upstream:  https://github.com/namazso/PawnIO.Modules
+  Author:    namazso
+  Licence:   GNU Lesser General Public License, version 2.1
+  Text:      crates/loadbear-sensors-windows/modules/COPYING-PawnIO-Modules
+
+WRITTEN OFFER OF SOURCE
+
+The corresponding source for these modules is the .p Pawn source in the
+upstream repository above, which is public and freely downloadable. In addition,
+and to satisfy LGPL-2.1 section 4 directly rather than by reference, the
+copyright holder of this distribution will, for three years from the date any
+LoadBear binary containing these modules is distributed, supply a complete
+machine-readable copy of the corresponding source for these three modules to
+anyone who asks, at no charge beyond the cost of the transfer.
+
+Requests to: bojan@zeroemdashes.com
+
+The modules are unmodified. LoadBear compiles nothing into them and patches
+nothing in them; it loads them as published.
+
+
+================================================================================
+2. NOT redistributed: the PawnIO driver and its setup program
+================================================================================
+
+LoadBear does not ship, bundle, or embed any of the following. They are
+downloaded at install time from their own publisher, on the user's machine,
+with the user's consent, and their Authenticode signature is verified before
+anything is executed.
+
+  PawnIO driver            https://pawnio.eu
+                           Source GPL-2.0, https://github.com/namazso/PawnIO
+  PawnIOLib.dll            LGPL-2.1, installed by the setup program
+  PawnIO_setup.exe         https://github.com/namazso/PawnIO.Setup
+                           Declares no licence
+
+The setup program was embedded in the LoadBear binary until 2026-08-16. It was
+removed before this repository was made public, for the reason recorded in the
+last line above: a work that declares no licence grants no permission to
+redistribute it. Downloading it is the arrangement that needs no such
+permission, and it is why LoadBear verifies the signature of what it fetches
+rather than trusting a copy of its own.
+
+Uninstalling LoadBear leaves PawnIO installed. LoadBear did not put it on the
+machine in any sense it owns, other tools use the same driver, and removing
+something the user may depend on elsewhere is not an uninstaller's business.
+
+
+================================================================================
+3. Rust dependencies
+================================================================================
+
+LoadBear links a number of Rust crates, each under its own licence, almost all
+MIT or Apache-2.0. The authoritative list for any given build is Cargo.lock in
+this repository. To produce a full report:
+
+  cargo install cargo-about
+  cargo about generate about.hbs

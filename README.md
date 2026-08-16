@@ -61,7 +61,7 @@ Everything works out of the box except these two, which need ring-0 access. Load
 
 That does two things behind a single consent prompt:
 
-1. Installs [PawnIO](https://pawnio.eu), from its official release URL, after checking the signature. It is signed, HVCI compatible, and runs sandboxed bytecode modules rather than exposing raw ring-0 primitives. LoadBear deliberately does not redistribute it, which is what keeps the licensing clean. WinRing0, the traditional answer, is on the Windows vulnerable driver blocklist and is not an option.
+1. Downloads [PawnIO](https://pawnio.eu) from its official release URL, checks its Authenticode signature, and only then runs it. It is signed, HVCI compatible, and runs sandboxed bytecode modules rather than exposing raw ring-0 primitives. **LoadBear does not redistribute it**, which is what keeps the licensing clean, so this one step needs a network connection. WinRing0, the traditional answer, is on the Windows vulnerable driver blocklist and is not an option.
 2. Registers `LoadBearHelper`, a service running as Local System that reads the sensors and publishes them into shared memory the interface reads without any privileges of its own.
 
 Elevation is paid once. Decline it and everything else still works, with temperature and power reported as unavailable rather than guessed at.
@@ -127,3 +127,5 @@ Designed for three, shipping in order:
 ## Licence
 
 Apache-2.0. See [LICENSE](LICENSE).
+
+Third-party components and what LoadBear does and does not hand out are set out in [NOTICE](NOTICE). The short version: the PawnIO driver and its setup program are downloaded from their own publisher and never redistributed here, and the three compiled PawnIO modules under `crates/loadbear-sensors-windows/modules/` are LGPL-2.1 and come with an offer of source.

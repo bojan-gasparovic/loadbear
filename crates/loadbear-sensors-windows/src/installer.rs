@@ -1,43 +1,61 @@
 //! Fetches and runs the official PawnIO installer on the user's behalf.
 //!
-//! # The installer is bundled
+//! # The installer is downloaded, not redistributed
 //!
-//! Bojan's call, 2026-08-14: the user should not have to install anything
-//! separately, and should not wait for a download either. `PawnIO_setup.exe`
-//! version 2.2.0 is embedded in the binary, written to a temporary path,
-//! signature-checked, and run silently.
-//!
-//! Two things about that are worth recording rather than discovering later.
+//! It was embedded with `include_bytes!` until 2026-08-16, so that nobody had
+//! to wait for a download. **That was removed before the repository was made
+//! public, and it must not come back.**
 //!
 //! **Licence.** The setup program is published from `namazso/PawnIO.Setup`,
-//! which declares no licence. The PawnIO driver source is GPL-2.0 and
-//! `PawnIOLib.dll` is LGPL-2.1, both clear, but the installer wrapper we ship
-//! carries no stated terms. This was raised and the decision was to bundle
-//! anyway.
+//! which declares no licence at all. The driver source is GPL-2.0 and
+//! `PawnIOLib.dll` is LGPL-2.1, both clear, but the setup wrapper carries no
+//! stated terms, and no stated terms means no permission to redistribute it.
+//! Shipping it inside a private repository was one thing. Publishing it is
+//! another, and the README told people LoadBear redistributes nothing, which
+//! was not true while the bytes were in the binary. Downloading makes the
+//! sentence true rather than deleting it.
 //!
-//! **The reboot.** Bundling does not avoid it. The setup program installs a
-//! root-enumerated PnP device via `newdev.dll` and
-//! `UpdateDriverForPlugAndPlayDevicesW`, which reports a reboot requirement.
-//! There are no `CreateService` or `StartService` calls anywhere in it, so it
-//! is not a dynamically loaded driver the way Core Temp's is. That difference
-//! is architectural and no packaging choice changes it.
+//! **This is why `verify_signature` exists.** Fetching an executable and
+//! running it elevated without checking who signed it would make LoadBear a
+//! delivery mechanism for whatever that URL happens to serve. Nothing is
+//! executed before that check passes.
 //!
-//! The compiled PawnIO modules are shipped alongside in `modules/`, LGPL-2.1
-//! with their licence text.
+//! **The reboot.** Downloading does not cause it and bundling never avoided
+//! it. The setup program installs a root-enumerated PnP device via `newdev.dll`
+//! and `UpdateDriverForPlugAndPlayDevicesW`, which reports a reboot
+//! requirement. There are no `CreateService` or `StartService` calls anywhere
+//! in it, so it is not a dynamically loaded driver the way Core Temp's is. That
+//! difference is architectural and no packaging choice changes it.
+//!
+//! The compiled PawnIO modules in `modules/` are a separate question and are
+//! still shipped, under LGPL-2.1, with their licence text and the written offer
+//! of source in `NOTICE`.
 
 use std::path::PathBuf;
 
-/// The bundled setup program, PawnIO 2.2.0.
+/// Where the setup program comes from, in one piece, for showing to a person.
 ///
-/// SHA-256 `1f519a22e47187f70a1379a48ca604981c4fcf694f4e65b734aaa74a9fba3032`,
-/// obtained from the official release on 2026-08-14. Its signature is still
-/// verified at runtime rather than trusted on the basis of having shipped it,
-/// because a build machine is not a trustworthy place either.
-const SETUP_EXE: &[u8] = include_bytes!("../vendor/PawnIO_setup.exe");
-
-/// Where the bundled copy came from, for provenance rather than for fetching.
+/// WinHTTP wants the host and the path apart, so they are also below. A test
+/// asserts the three agree, because a URL split across three constants is a
+/// URL that can drift into pointing somewhere nobody intended.
 pub const INSTALLER_SOURCE: &str =
     "https://github.com/namazso/PawnIO.Setup/releases/latest/download/PawnIO_setup.exe";
+
+const INSTALLER_HOST: &str = "github.com";
+const INSTALLER_PATH: &str = "/namazso/PawnIO.Setup/releases/latest/download/PawnIO_setup.exe";
+
+/// Bounds on what will be accepted as the setup program.
+///
+/// The ceiling is not a guess about the file, which is around 3.4 MB. It is
+/// the point past which a server answering with something enormous stops being
+/// worth reading into memory. The floor catches an error page served with a
+/// 200, which is small and would otherwise reach the signature check.
+const MAX_INSTALLER_BYTES: usize = 32 * 1024 * 1024;
+const MIN_INSTALLER_BYTES: usize = 1024 * 1024;
+
+/// Milliseconds. A person is watching a button that says Installing, so a
+/// stalled connection has to give up rather than hang the flow forever.
+const TIMEOUT_MS: i32 = 30_000;
 
 /// Arguments passed to the setup program.
 ///
@@ -60,7 +78,9 @@ const SETUP_ARGS: &str = "-install -silent";
 
 #[derive(Debug, thiserror::Error)]
 pub enum InstallError {
-    #[error("the bundled installer could not be written to a temporary file")]
+    #[error("the driver installer could not be downloaded. Check your connection and try again.")]
+    DownloadFailed,
+    #[error("the downloaded installer could not be written to a temporary file")]
     StagingFailed,
     #[error("the downloaded file does not look like an installer")]
     NotAnInstaller,
@@ -76,16 +96,148 @@ pub enum InstallError {
     InstallerFailed,
 }
 
-/// Write the bundled setup program to a temporary path.
+/// A WinHTTP handle that closes itself.
 ///
-/// Nothing is executed here. No network is touched.
-pub fn stage() -> Result<PathBuf, InstallError> {
-    if SETUP_EXE.len() < 2 || &SETUP_EXE[..2] != b"MZ" {
-        return Err(InstallError::NotAnInstaller);
+/// Every step below can fail, and a handle leaked on the error path is a
+/// leak that only shows up for the users whose network is having a bad day.
+struct WinHttpHandle(*mut core::ffi::c_void);
+
+impl Drop for WinHttpHandle {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            // SAFETY: a handle this type owns, closed exactly once.
+            unsafe { windows_sys::Win32::Networking::WinHttp::WinHttpCloseHandle(self.0) };
+        }
+    }
+}
+
+/// Fetch the official setup program into memory.
+///
+/// Nothing is executed here and nothing is trusted yet. The bytes are checked
+/// for shape and size only, which is enough to reject an error page served
+/// with a 200 before it reaches the signature check.
+///
+/// WinHTTP rather than an HTTP crate, because this code is linked into the
+/// helper service, and a service whose whole job is to read sensors and write
+/// a struct does not need an async runtime to do it.
+fn fetch() -> Result<Vec<u8>, InstallError> {
+    use windows_sys::Win32::Networking::WinHttp::{
+        WinHttpConnect, WinHttpOpen, WinHttpOpenRequest, WinHttpQueryHeaders,
+        WinHttpReceiveResponse, WinHttpSendRequest, WinHttpSetTimeouts, WinHttpReadData,
+        INTERNET_DEFAULT_HTTPS_PORT, WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_FLAG_SECURE,
+        WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_QUERY_STATUS_CODE,
+    };
+
+    fn wide(s: &str) -> Vec<u16> {
+        s.encode_utf16().chain(std::iter::once(0)).collect()
     }
 
+    let agent = wide("LoadBear");
+    let host = wide(INSTALLER_HOST);
+    let path = wide(INSTALLER_PATH);
+    let verb = wide("GET");
+
+    // SAFETY: every pointer below is a NUL terminated wide string that
+    // outlives its call, and each handle is wrapped so it closes once.
+    unsafe {
+        let session = WinHttpHandle(WinHttpOpen(
+            agent.as_ptr(),
+            WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+            std::ptr::null(),
+            std::ptr::null(),
+            0,
+        ));
+        if session.0.is_null() {
+            return Err(InstallError::DownloadFailed);
+        }
+        WinHttpSetTimeouts(session.0, TIMEOUT_MS, TIMEOUT_MS, TIMEOUT_MS, TIMEOUT_MS);
+
+        let connect = WinHttpHandle(WinHttpConnect(
+            session.0,
+            host.as_ptr(),
+            INTERNET_DEFAULT_HTTPS_PORT,
+            0,
+        ));
+        if connect.0.is_null() {
+            return Err(InstallError::DownloadFailed);
+        }
+
+        // WINHTTP_FLAG_SECURE is what makes this HTTPS rather than a plain
+        // request to port 443. Redirects are followed by default, and the
+        // default policy refuses a downgrade to HTTP, which is what carries
+        // the request from github.com to wherever the release actually lives.
+        let request = WinHttpHandle(WinHttpOpenRequest(
+            connect.0,
+            verb.as_ptr(),
+            path.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            WINHTTP_FLAG_SECURE,
+        ));
+        if request.0.is_null() {
+            return Err(InstallError::DownloadFailed);
+        }
+
+        if WinHttpSendRequest(request.0, std::ptr::null(), 0, std::ptr::null(), 0, 0, 0) == 0
+            || WinHttpReceiveResponse(request.0, std::ptr::null_mut()) == 0
+        {
+            return Err(InstallError::DownloadFailed);
+        }
+
+        let mut status: u32 = 0;
+        let mut len = std::mem::size_of::<u32>() as u32;
+        if WinHttpQueryHeaders(
+            request.0,
+            WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+            std::ptr::null(),
+            &mut status as *mut _ as *mut core::ffi::c_void,
+            &mut len,
+            std::ptr::null_mut(),
+        ) == 0
+            || status != 200
+        {
+            return Err(InstallError::DownloadFailed);
+        }
+
+        let mut body: Vec<u8> = Vec::new();
+        let mut chunk = [0u8; 64 * 1024];
+        loop {
+            let mut read: u32 = 0;
+            if WinHttpReadData(
+                request.0,
+                chunk.as_mut_ptr() as *mut core::ffi::c_void,
+                chunk.len() as u32,
+                &mut read,
+            ) == 0
+            {
+                return Err(InstallError::DownloadFailed);
+            }
+            if read == 0 {
+                break;
+            }
+            body.extend_from_slice(&chunk[..read as usize]);
+            if body.len() > MAX_INSTALLER_BYTES {
+                return Err(InstallError::NotAnInstaller);
+            }
+        }
+
+        if body.len() < MIN_INSTALLER_BYTES || !body.starts_with(b"MZ") {
+            return Err(InstallError::NotAnInstaller);
+        }
+        Ok(body)
+    }
+}
+
+/// Download the setup program and write it to a temporary path.
+///
+/// Nothing is executed here. The caller verifies the signature before running
+/// anything, and that order is the whole security argument for downloading at
+/// all.
+pub fn stage() -> Result<PathBuf, InstallError> {
+    let body = fetch()?;
     let path = std::env::temp_dir().join("LoadBear-PawnIO_setup.exe");
-    std::fs::write(&path, SETUP_EXE).map_err(|_| InstallError::StagingFailed)?;
+    std::fs::write(&path, &body).map_err(|_| InstallError::StagingFailed)?;
     Ok(path)
 }
 
@@ -263,7 +415,10 @@ pub fn run_elevated_with(path: &std::path::Path, arguments: &str) -> Result<u32,
     Ok(code)
 }
 
-/// Stage, verify, and run, in that order.
+/// Download, verify, and run, in that order.
+///
+/// The order is the point. Verification happens on the file that will be
+/// executed, after it has landed and before anything runs it.
 pub fn install() -> Result<(), InstallError> {
     let path = stage()?;
     verify_signature(&path)?;
@@ -292,31 +447,87 @@ mod tests {
     }
 
     #[test]
-    fn the_bundled_installer_is_a_real_executable_of_the_right_size() {
-        assert_eq!(&SETUP_EXE[..2], b"MZ", "the bundled file is not a PE image");
-        assert!(
-            SETUP_EXE.len() > 3_000_000,
-            "the bundled installer looks truncated at {} bytes",
-            SETUP_EXE.len()
+    fn the_split_url_still_names_the_same_file_as_the_whole_one() {
+        // WinHTTP wants the host and the path apart, and a URL living in three
+        // constants is a URL that can drift into pointing somewhere else while
+        // the string shown to a person goes on saying the old thing.
+        assert_eq!(
+            format!("https://{INSTALLER_HOST}{INSTALLER_PATH}"),
+            INSTALLER_SOURCE
         );
     }
 
     #[test]
-    fn the_bundled_installer_still_passes_its_own_signature_check() {
-        // Shipping it is not a reason to trust it. This is the check that
-        // would catch a corrupted vendor file or a tampered build.
-        let p = stage().expect("staging the bundled installer must work");
-        let r = verify_signature(&p);
-        let _ = std::fs::remove_file(&p);
+    fn the_installer_is_fetched_over_https_from_the_official_repository() {
+        // The licence position rests on this. PawnIO.Setup declares no terms,
+        // so LoadBear may run it but may not hand out copies of it, and a
+        // plaintext fetch would undo the signature check by inviting whatever
+        // the network wants to serve.
+        assert!(INSTALLER_SOURCE.starts_with("https://"));
+        assert!(INSTALLER_SOURCE.contains("namazso/PawnIO.Setup"));
+    }
+
+    #[test]
+    fn this_crate_redistributes_no_third_party_executable() {
+        // The regression this guards: the 3.4 MB PawnIO setup program was
+        // embedded here until 2026-08-16, while the README told the public
+        // that LoadBear redistributes nothing. The repository is public now,
+        // so putting it back would publish both the binary and the untruth.
+        //
+        // Checked by size rather than by grepping this file for the macro
+        // name, which fails the moment the comment above mentions it. The
+        // largest thing this crate is meant to carry is RyzenSMU.bin at 39 KB,
+        // and the setup program is a hundred times that.
+        const CEILING: u64 = 512 * 1024;
+
+        fn walk(dir: &std::path::Path, found: &mut Vec<(String, u64)>) {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return;
+            };
+            for e in entries.flatten() {
+                let path = e.path();
+                if path.is_dir() {
+                    walk(&path, found);
+                } else if let Ok(m) = e.metadata() {
+                    if m.len() > CEILING {
+                        found.push((path.display().to_string(), m.len()));
+                    }
+                }
+            }
+        }
+
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut oversized = Vec::new();
+        walk(root, &mut oversized);
+
         assert!(
-            r.is_ok(),
-            "the bundled installer failed signature verification"
+            oversized.is_empty(),
+            "this crate must redistribute nothing large. Found: {oversized:?}"
         );
+        assert!(
+            !root.join("vendor").exists(),
+            "vendor/ is where the redistributed setup program used to live"
+        );
+    }
+
+    #[test]
+    #[ignore = "reaches the network. Run with: cargo test -p loadbear-sensors-windows -- --ignored"]
+    fn the_official_installer_downloads_and_passes_its_signature_check() {
+        // The only test that proves the download path works at all. It is the
+        // whole feature: fetch, shape check, then Authenticode before anything
+        // is executed.
+        let p = stage().expect("the official installer must download");
+        let r = verify_signature(&p);
+        let size = std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
+        let _ = std::fs::remove_file(&p);
+        assert!(r.is_ok(), "the downloaded installer failed verification");
+        assert!(size > 1_000_000, "the download looks truncated at {size}");
     }
 
     #[test]
     fn errors_are_displayable_without_leaking_raw_codes() {
         for e in [
+            InstallError::DownloadFailed,
             InstallError::StagingFailed,
             InstallError::NotAnInstaller,
             InstallError::SignatureRejected,

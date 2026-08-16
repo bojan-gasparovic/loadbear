@@ -1,7 +1,20 @@
 # LoadBear design
 
-Status: approved, pre-implementation.
-Date: 2026-08-14
+Written 2026-08-14, before implementation. Kept as the record of what was
+intended and why, not rewritten to match what was built.
+
+**Two things in it are no longer true, and both are marked where they appear.**
+
+- **Notifications were cancelled on 2026-08-16.** LoadBear is a monitor you
+  look at. Section 7 describes an interruption contract that no longer has
+  anything to interrupt with, and it is kept because the reasoning still
+  governs what counts as a finding worth showing at all.
+- **Section 10's specification database shrank.** Cores, threads and the base
+  clock now come from the operating system, so the database carries only the
+  rated power band and the junction temperature limit.
+
+`README.md` describes what LoadBear actually does today. Where the two
+disagree, the README is right.
 
 ## 1. Problem
 
@@ -65,13 +78,25 @@ The base clock check is the strongest signal LoadBear has and should be treated 
 
 Three tiers. These are severity states, not colours, and the visual language is the mascot's posture rather than a colour code. Silhouette must carry the meaning unaided, since tray icons render at 16 to 32 pixels and macOS menu bar icons are template images rendered monochrome and system-tinted by convention.
 
-| Tier | Meaning | Notifies |
+The Notifies column below was overtaken by the cancellation in section 7. No tier notifies, because nothing notifies.
+
+| Tier | Meaning | ~~Notifies~~ |
 |---|---|---|
 | **Easy** | Within spec, headroom available | Never |
 | **Braced** | Degraded, or evidence still accumulating | Never |
-| **Strained** | Sustained and out of spec | Only if the interruption contract is met |
+| **Strained** | Sustained and out of spec | ~~Only if the interruption contract is met~~ Never |
 
 ## 7. The interruption contract
+
+> **Cancelled 2026-08-16. LoadBear sends no notifications and is not going to.**
+> It is a window you look at, and the `NotificationGate` type was removed from
+> `loadbear-core` the day the decision was taken.
+>
+> This section stays because the reasoning outlived the feature. The three
+> conditions and the remediation classes are now the bar a finding has to clear
+> to be worth *showing*, and `Cause`, `CauseKind`, `Finding` and `Remediation`
+> are still live types that attribution uses. Read "notify" below as "count as
+> a finding at all".
 
 Notification fatigue is the failure mode that kills tools in this category. A tool that pops during a routine build is muted the same day.
 

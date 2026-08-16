@@ -253,8 +253,12 @@ fn get_status(state: State<'_, Shared>) -> Status {
 ///
 /// Blocks until the installer exits, which is what lets the UI report a real
 /// outcome rather than an optimistic one. LoadBear redistributes nothing: the
-/// file comes from the official release URL and its signature is checked before
-/// it is executed.
+/// file is fetched from the official release URL over HTTPS and its Authenticode
+/// signature is checked before it is executed. That sentence was untrue until
+/// 2026-08-16, when the embedded copy was removed, so do not put one back.
+///
+/// This is the one step that needs a network connection. Everything else works
+/// offline.
 #[tauri::command]
 async fn enable_temperature() -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(|| {
