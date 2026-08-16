@@ -23,13 +23,17 @@ where Bojan will put it and is not live at the time of writing. The file lands
 under `target/`, which is gitignored, so it is in no repository either. That is
 LB-23, and the remaining half of it is a publishing step only Bojan can do.
 
-**The published SHA-256 has to be regenerated on every release**, because the
-hosted filename carries no version while the built one does. Built 0.1.0 is
-`LoadBear_0.1.0_x64-setup.exe`, 2,109,777 bytes,
-`a6a6dbad4d93f29b2cc6ead437d85370199b0363bfc2386a3221a6e0bf45875c`. Rename it
-to `LoadBear-x64-setup.exe` on upload, and if the README's hash and the hosted
-file ever disagree, the check the README asks people to run fails and says the
-download was tampered with.
+**The hosted filename carries no version on purpose.** Bojan's decision:
+`LoadBear-x64-setup.exe` never changes, so the link never breaks and nothing
+pointing at it goes stale. The built file is `LoadBear_<version>_x64-setup.exe`,
+so renaming on upload is a release step rather than a slip.
+
+**The consequence is that the README hash has to be regenerated on every
+release**, since the URL cannot say which version it is serving. Built 0.1.0 is
+2,109,777 bytes,
+`a6a6dbad4d93f29b2cc6ead437d85370199b0363bfc2386a3221a6e0bf45875c`. A stale
+hash against a fresh upload does not read as an out of date document. It reads
+as a tampered download, because that is what the check exists to detect.
 
 Everything else on the list is a quality gap. This one is the difference
 between a repository and a product.
