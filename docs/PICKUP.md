@@ -16,11 +16,20 @@ target triple, and bundles an NSIS installer to
 `loadbear-service.exe` beside the interface, so an installed copy reads
 temperature and power rather than reporting them permanently dead.
 
-**The blocker moved one step downstream. Nobody can get the installer.** The
-README tells people to download it from GitHub Releases. There are no releases
-and no tags, and the file lands under `target/`, which is gitignored, so it is
-in no repository either. The plan is to host it on zeroemdashes.com. That is
-LB-23, and it is Bojan's to do, since it is a publishing step.
+**The blocker is now one upload. Nobody can get the installer yet.** The README
+points at
+`https://zeroemdashes.com/apps/loadbear/LoadBear-x64-setup.exe`, which is
+where Bojan will put it and is not live at the time of writing. The file lands
+under `target/`, which is gitignored, so it is in no repository either. That is
+LB-23, and the remaining half of it is a publishing step only Bojan can do.
+
+**The published SHA-256 has to be regenerated on every release**, because the
+hosted filename carries no version while the built one does. Built 0.1.0 is
+`LoadBear_0.1.0_x64-setup.exe`, 2,109,777 bytes,
+`a6a6dbad4d93f29b2cc6ead437d85370199b0363bfc2386a3221a6e0bf45875c`. Rename it
+to `LoadBear-x64-setup.exe` on upload, and if the README's hash and the hosted
+file ever disagree, the check the README asks people to run fails and says the
+download was tampered with.
 
 Everything else on the list is a quality gap. This one is the difference
 between a repository and a product.

@@ -49,9 +49,21 @@ Cores, threads and the base clock come from the operating system, so they are ri
 
 ## Installing it
 
-Windows 10 or 11 on x86-64. Download `LoadBear_<version>_x64-setup.exe` from [Releases](https://github.com/bojan-gasparovic/loadbear/releases) and run it.
+Windows 10 or 11 on x86-64.
 
-**The installer is not code signed.** SmartScreen will say the publisher is unknown. Choose "More info", then "Run anyway", or check the SHA-256 against the one published with the release first. LoadBear is given away, and a Windows signing certificate is a few hundred dollars a year, so it stays unsigned. The source is here and it builds in one command if you would rather not take the binary on trust.
+**[Download LoadBear-x64-setup.exe](https://zeroemdashes.com/apps/loadbear/LoadBear-x64-setup.exe)** (2.1 MB), then run it.
+
+| Version | 0.1.0 |
+|---|---|
+| SHA-256 | `a6a6dbad4d93f29b2cc6ead437d85370199b0363bfc2386a3221a6e0bf45875c` |
+
+**The installer is not code signed.** SmartScreen will say the publisher is unknown. Choose "More info", then "Run anyway". If you would rather check first, the hash above is what the file should be, and this is how to ask your own machine:
+
+```powershell
+Get-FileHash -Algorithm SHA256 LoadBear-x64-setup.exe
+```
+
+That proves the file reached you unaltered. It does not prove anything about who wrote it, which is what signing would do, and a Windows signing certificate is a few hundred dollars a year for something given away. The source is here and it builds in one command if you would rather not take a binary on trust at all.
 
 It installs to `C:\Program Files\LoadBear` and asks for administrator rights once to do it. The application itself runs as you, with no privileges of its own.
 
