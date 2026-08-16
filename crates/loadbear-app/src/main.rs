@@ -279,6 +279,66 @@ async fn enable_temperature() -> Result<String, String> {
     .map_err(|_| "the installer could not be started".to_string())?
 }
 
+/// The two shapes the window takes, in logical pixels.
+///
+/// Width is the same in both, so nothing jumps sideways on the desktop when the
+/// shape changes and the strip lines up with the panel it came from.
+///
+/// Both heights include the 28px title bar the page draws for itself. The
+/// expanded figure is 28 more than the 560 the layout was measured against,
+/// which is what keeps the twelve process rows fitting exactly.
+///
+/// 118 is measured up from the tiles. Two rows of four are 71.6 tall and sit
+/// flush against their border, which makes 73.6 the height of both panels; the
+/// page's own padding and the title bar are the rest. The graph gave up its
+/// heading to fit and still has 47 of plot, which is more than it had when the
+/// strip was 50px taller.
+const EXPANDED_SIZE: (f64, f64) = (900.0, 588.0);
+const COLLAPSED_SIZE: (f64, f64) = (900.0, 118.0);
+
+/// Switch the window between the full panel and the always on top strip.
+///
+/// The page has already rearranged itself by the time this runs. Resizing is
+/// the half the page cannot do for itself: the window is declared
+/// non-resizable so a person cannot drag it to a shape nothing was laid out
+/// for, which does not stop the application from choosing one of its own two.
+///
+/// Not remembered across restarts. It always opens as the full panel, since
+/// that is the shape that can explain itself.
+#[tauri::command]
+fn set_collapsed(window: tauri::Window, collapsed: bool) -> Result<(), String> {
+    let (width, height) = if collapsed {
+        COLLAPSED_SIZE
+    } else {
+        EXPANDED_SIZE
+    };
+    window
+        .set_size(tauri::LogicalSize::new(width, height))
+        .map_err(|e| e.to_string())
+}
+
+/// Minimise, from the page's own caption buttons.
+///
+/// Windows will not let an application put a button of its own among the
+/// system caption buttons, and the collapse control has to sit beside minimise.
+/// So the window is undecorated and the page draws all four. That makes these
+/// two commands the cost of the arrangement: with no system chrome there is
+/// nothing else left to minimise or dismiss the window.
+#[tauri::command]
+fn minimize_window(window: tauri::Window) -> Result<(), String> {
+    window.minimize().map_err(|e| e.to_string())
+}
+
+/// Dismiss to the tray.
+///
+/// Hides rather than closes, which is what the `CloseRequested` handler already
+/// did with the system close button. LoadBear is a resident monitor and quitting
+/// stays on the tray menu, deliberately.
+#[tauri::command]
+fn hide_window(window: tauri::Window) -> Result<(), String> {
+    window.hide().map_err(|e| e.to_string())
+}
+
 /// Where the footer links point.
 ///
 /// Hardcoded rather than passed in from the page. The commands below hand a
@@ -583,6 +643,9 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             get_status,
             enable_temperature,
+            set_collapsed,
+            minimize_window,
+            hide_window,
             open_repository,
             open_contact
         ])

@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "The window draws its own title bar, so the page needs to be able to start a window drag. Everything else the interface asks for goes through a command in main.rs, which is why nothing else is granted here.",
+  "windows": ["main"],
+  "permissions": ["core:window:allow-start-dragging"]
+}

@@ -40,10 +40,38 @@
     -webkit-font-smoothing: antialiased;
     user-select: none; cursor: default;
   }
+  body { display: flex; flex-direction: column; }
   #app {
-    height: 100%; padding: 16px 18px 12px;
+    flex: 1 1 auto; min-height: 0; padding: 16px 18px 12px;
     display: grid; grid-template-rows: auto 1fr auto; gap: 12px; overflow: hidden;
   }
+
+  /* The window is undecorated and draws its own caption, because Windows will
+     not let an application put a button of its own among the system caption
+     buttons and the collapse control belongs beside minimise rather than loose
+     in the page.
+
+     28px against the 39 the system draws. In the full window that is nothing;
+     on a 192px strip it is a seventh of the height back. */
+  #titlebar { flex: none; height: 28px; display: grid;
+              grid-template-columns: auto 1fr auto; align-items: center;
+              background: var(--panel); border-bottom: 1px solid var(--line); }
+  /* Same silhouette and the same tier colour as the large one, so the caption
+     says how the machine is doing even when the window is behind something. */
+  #tb-icon { width: 15px; height: 15px; margin-left: 10px;
+             background-color: var(--faint);
+             -webkit-mask-size: contain; -webkit-mask-repeat: no-repeat;
+             -webkit-mask-position: center; transition: background-color .3s ease; }
+  #tb-title { font-size: 11px; color: var(--dim); padding-left: 8px; }
+  #tb-buttons { display: flex; align-self: stretch; }
+  #tb-buttons button { width: 40px; border: 0; padding: 0; margin: 0; cursor: pointer;
+                       background: transparent; color: var(--dim);
+                       font: inherit; font-size: 11px; line-height: 1;
+                       display: flex; align-items: center; justify-content: center; }
+  #tb-buttons button:hover { background: var(--well); color: var(--text); }
+  /* The one colour Windows uses for this and the one users read without
+     thinking, so it is not worth being original about. */
+  #tb-close:hover { background: #c42b1c; color: #ffffff; }
 
   /* Two halves matching `.cols` below, so the temperature row is exactly as
      wide as the graph underneath it and the tiles line up with its edges. */
@@ -69,7 +97,13 @@
      slot and nothing below it moves when it fills. */
   .col-left { display: grid; grid-template-rows: auto auto 1fr; gap: 10px;
               overflow: hidden; min-height: 0; }
-  .col-right { display: grid; grid-template-rows: 132px 1fr; gap: 10px;
+  /* The findings slot is 142px rather than a round 132 because of what the
+     remainder does to the panel underneath it. Running is a stack of 19.95px
+     rows in a box that clips, so unless the box is close to a whole number of
+     them the last row is sliced through its text and reads as a rendering
+     fault. Ten pixels moved up here lands the remainder near zero, which
+     costs nothing since findings had the room to spare. */
+  .col-right { display: grid; grid-template-rows: 142px 1fr; gap: 10px;
                overflow: hidden; min-height: 0; }
   .col-left > *, .col-right > * { min-height: 0; overflow: hidden; }
 
@@ -117,7 +151,12 @@
   .graph .strip { display: flex; height: 4px; overflow: hidden; flex: none;
                   border-radius: 2px; margin-top: 3px; }
   .graph .strip i { flex: 1 1 0; }
-  .graph .cap { display: flex; justify-content: space-between; align-items: baseline;
+  /* `flex: none` because the panel above this one can be squeezed shorter than
+     its contents, and a flexible caption absorbs the squeeze by being sliced
+     through its own text. The plot has a min-height and gives way first, which
+     is the right order: a shorter graph still reads, half a word does not. */
+  .graph .cap { flex: none; display: flex; justify-content: space-between;
+                align-items: baseline;
                 font-size: 10px; color: var(--hair); margin-top: 5px; }
   /* The legend colours the word rather than a swatch beside it. A single dash
      glyph at this size reads as grey whatever colour it is actually painted. */
@@ -204,9 +243,74 @@
   footer a { color: var(--faint); cursor: pointer; text-decoration: none;
              border-bottom: 1px solid transparent; }
   footer a:hover { color: var(--plot-line); border-bottom-color: var(--plot-line); }
+
+  /* The collapsed shape: a 900x118 strip meant to sit on top of other windows
+     all day without covering them.
+
+     It is the same three nodes the full window already has, moved into one row
+     rather than drawn a second time. Everything else hides. Keeping one copy of
+     each is what lets `render` go on finding `#chart` and `#zones` by id and
+     stay unaware that either layout exists.
+
+     The bear comes across without its words. At 56px, colour alone carries the
+     tier, which is the one thing here that is an answer rather than evidence.
+
+     Width is spent on the graph. Five minutes of history in 191px was a
+     sparkline; the tiles fold to four across so the plot can have 538. */
+  #compact { display: none; }
+  body.collapsed header,
+  body.collapsed .cols,
+  body.collapsed footer { display: none; }
+  body.collapsed #app { grid-template-rows: 1fr; }
+  body.collapsed #compact { display: grid; grid-template-columns: 56px 1fr 228px;
+                            gap: 10px; min-height: 0; overflow: hidden; }
+  body.collapsed #compact > * { min-height: 0; }
+  body.collapsed #bear { width: 56px; height: 56px; align-self: center; }
+
+  /* Every margin in the strip is the smallest one that still separates two
+     things, and vertically there is none at all. The full window can afford air
+     because it is read; this is meant to be looked past. The tiles set the
+     height of both panels by sitting flush against their own borders, and
+     everything the trimming frees goes to the window being shorter.
+
+     The graph loses its heading with them. The caption under the plot already
+     reads "5 min ago" and "now", so the line above it was saying a third time
+     what the axis says twice. */
+  body.collapsed #app { padding: 8px 10px; }
+  body.collapsed .panel { padding: 0 8px; }
+  body.collapsed #graph-panel > h2 { display: none; }
+  body.collapsed .graph .cap { margin-top: 3px; }
+
+  /* Both halves are panels, because one bordered box beside a set of loose
+     tiles reads as an unfinished layout rather than as two sections. 234px is
+     what holds four tiles at the width they have in the full window.
+
+     No heading. Eight tiles reading "core #0" through "core #7" are not
+     mistakable for anything else. No padding above or below them either: the
+     tiles are the shortest thing in the strip that cannot be made shorter, so
+     they are what the whole window is measured from. */
+  body.collapsed #temp { align-self: stretch; text-align: left;
+                         background: var(--panel); border: 1px solid var(--line);
+                         border-radius: 8px; padding: 0 8px; }
+  body.collapsed #zones { grid-template-columns: repeat(4, 1fr); }
+  /* Set inline by `drawTemperature`, so overriding it takes the keyword. The
+     button and its outcome are a full window conversation and there is no room
+     for either in a strip. */
+  body.collapsed #enable,
+  body.collapsed #enable-note { display: none !important; }
 </style>
 </head>
 <body>
+<div id="titlebar" data-tauri-drag-region>
+  <div id="tb-icon" role="img" aria-label="LoadBear"></div>
+  <div id="tb-title" data-tauri-drag-region>LoadBear</div>
+  <div id="tb-buttons">
+    <button id="tb-collapse" type="button" title="Collapse">&#9652;</button>
+    <button id="tb-min" type="button" title="Minimise">&#8211;</button>
+    <button id="tb-close" type="button" title="Close to tray">&#10005;</button>
+  </div>
+</div>
+
 <div id="app">
   <header>
     <div class="hleft">
@@ -266,7 +370,7 @@
         </div>
       </div>
 
-      <div class="panel">
+      <div class="panel" id="graph-panel">
         <h2>Last 5 minutes</h2>
         <div class="body graph">
           <svg id="chart" viewBox="0 0 200 100" preserveAspectRatio="none" aria-hidden="true"></svg>
@@ -297,6 +401,10 @@
       </div>
     </div>
   </div>
+
+  <!-- Empty until the strip is asked for. The three nodes that live here are
+       borrowed from the layout above rather than copied. -->
+  <div id="compact"></div>
 
   <footer>
     <span id="stamp"></span>
@@ -451,9 +559,14 @@ function render(s) {
   const tier = s.tier.toLowerCase();
   $('tier').textContent = s.tier;
   $('tier').className = tier;
-  const bear = $('bear');
-  bear.style.webkitMaskImage = `url('bear-${tier}-128.png')`;
-  bear.style.backgroundColor = TIER_COLOR[TIER_INDEX[tier] ?? 0];
+  // Both bears, so the caption carries the tier when the window is behind
+  // something and in the strip, where the word does not come along.
+  const mask = `url('bear-${tier}-128.png')`;
+  const paint = TIER_COLOR[TIER_INDEX[tier] ?? 0];
+  for (const b of [$('bear'), $('tb-icon')]) {
+    b.style.webkitMaskImage = mask;
+    b.style.backgroundColor = paint;
+  }
   // Empty when a finding card below already says it, so the panel does not
   // state the same thing twice.
   const why = $('why');
@@ -527,6 +640,54 @@ function render(s) {
     hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
   });
 }
+
+// Switching shape moves three nodes and resizes the window. It does not draw a
+// second interface, which is the point: there is one graph and one set of tiles
+// in this document, and `render` above keeps finding them by id wherever they
+// currently sit.
+//
+// The layout changes before the window does, so the frame in between shows the
+// strip in a tall window rather than the full layout in a 192px one.
+let collapsed = false;
+
+async function setCollapsed(next) {
+  const bear = $('bear');
+  const graph = $('graph-panel');
+  const temp = $('temp');
+
+  if (next) {
+    $('compact').append(bear, graph, temp);
+  } else {
+    // Back where each came from. The bear is the first thing in `.hleft` and
+    // the other two are the last in theirs, so this restores the original
+    // order rather than merely the original parent.
+    document.querySelector('.hleft').prepend(bear);
+    document.querySelector('header').append(temp);
+    document.querySelector('.col-left').append(graph);
+  }
+
+  document.body.classList.toggle('collapsed', next);
+  $('tb-collapse').innerHTML = next ? '&#9662;' : '&#9652;';
+  $('tb-collapse').title = next ? 'Expand' : 'Collapse';
+  collapsed = next;
+
+  try {
+    await window.__TAURI__.core.invoke('set_collapsed', { collapsed: next });
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+$('tb-collapse').addEventListener('click', () => setCollapsed(!collapsed));
+
+// With no system chrome there is nothing else to minimise or dismiss the
+// window, so these two are not conveniences.
+$('tb-min').addEventListener('click', () => {
+  window.__TAURI__.core.invoke('minimize_window').catch(e => console.error(e));
+});
+$('tb-close').addEventListener('click', () => {
+  window.__TAURI__.core.invoke('hide_window').catch(e => console.error(e));
+});
 
 $('enable').addEventListener('click', async () => {
   const b = $('enable'), n = $('enable-note');
