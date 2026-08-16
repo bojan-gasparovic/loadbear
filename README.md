@@ -2,7 +2,13 @@
 
 A resident monitor that shows you what is overloading your machine, not merely that it is busy.
 
-> Status: working on Windows and used daily on the machine it was written on. There is no installer yet, so running it means building it. See [Building it](#building-it).
+> Status: working on Windows and used daily on the machine it was written on. See [Installing it](#installing-it).
+
+![The LoadBear window](docs/images/loadbear-window.png)
+
+It also folds to a strip that can sit on top of everything else without covering it, which is where it spends most of its time.
+
+![LoadBear collapsed to a strip](docs/images/loadbear-strip.png)
 
 ## Why
 
@@ -41,28 +47,55 @@ LoadBear does not tell you what is "normal" for your CPU, because nobody publish
 
 Cores, threads and the base clock come from the operating system, so they are right on any processor. A small embedded database adds the two things a machine cannot report about itself, the rated power band and the junction limit, and its absence costs those two judgements rather than the whole reading.
 
+## Installing it
+
+Windows 10 or 11 on x86-64. Download `LoadBear_<version>_x64-setup.exe` from [Releases](https://github.com/bojan-gasparovic/loadbear/releases) and run it.
+
+**The installer is not code signed.** SmartScreen will say the publisher is unknown. Choose "More info", then "Run anyway", or check the SHA-256 against the one published with the release first. LoadBear is given away, and a Windows signing certificate is a few hundred dollars a year, so it stays unsigned. The source is here and it builds in one command if you would rather not take the binary on trust.
+
+It installs to `C:\Program Files\LoadBear` and asks for administrator rights once to do it. The application itself runs as you, with no privileges of its own.
+
+### Temperature and package power
+
+Everything works out of the box except these two, which need ring-0 access. LoadBear ships no driver, so it borrows one. In the window, press **Enable temperature**.
+
+That does two things behind a single consent prompt:
+
+1. Installs [PawnIO](https://pawnio.eu), from its official release URL, after checking the signature. It is signed, HVCI compatible, and runs sandboxed bytecode modules rather than exposing raw ring-0 primitives. LoadBear deliberately does not redistribute it, which is what keeps the licensing clean. WinRing0, the traditional answer, is on the Windows vulnerable driver blocklist and is not an option.
+2. Registers `LoadBearHelper`, a service running as Local System that reads the sensors and publishes them into shared memory the interface reads without any privileges of its own.
+
+Elevation is paid once. Decline it and everything else still works, with temperature and power reported as unavailable rather than guessed at.
+
+### Removing it
+
+Uninstall from Settings, Apps. The uninstaller stops and deregisters the helper service before it removes anything, so nothing is left running.
+
+PawnIO is left installed on purpose. LoadBear did not write it, other monitoring tools use the same driver, and removing something you may depend on elsewhere is not an uninstaller's business. Remove it separately if you want it gone.
+
 ## Building it
 
 Requirements: Rust 1.75 or later, Windows 10 or 11 on x86-64.
 
+To run it from source:
+
 ```
 cargo build --release
+target\release\loadbear-app.exe
 ```
 
-Then run `target\release\loadbear-app.exe`.
-
-### Temperature and package power
-
-Both need ring-0 access, which LoadBear does not ship a driver for. Two extra steps enable them:
-
-1. Install [PawnIO](https://pawnio.eu). It is signed, HVCI compatible, and runs sandboxed bytecode modules rather than exposing raw ring-0 primitives. LoadBear deliberately does not bundle it, which is what keeps the licensing clean. WinRing0, the traditional answer, is on the Windows vulnerable driver blocklist and is not an option.
-2. Register the helper service once, from an elevated prompt:
+Temperature needs the helper registered from an elevated prompt, since a source build has no installer to do it:
 
 ```
 target\release\loadbear-service.exe --setup
 ```
 
-Elevation is paid once, at install. The helper runs as Local System, reads the sensors, and publishes them into shared memory that the interface reads without any privileges of its own. Without these steps everything else still works and temperature and power report as unavailable, with a link to fix it.
+To produce the installer, which also needs the Tauri CLI (`cargo install tauri-cli --version "^2.0"`):
+
+```
+.\build-installer.ps1
+```
+
+The script builds the helper, stages it under the name the bundler expects, and runs the bundle. It exists because the helper is a sidecar: `cargo tauri build` alone builds only the interface, and a stale or missing sidecar produces an installer that looks fine and ships an application whose temperature is permanently dead.
 
 ## Known gaps
 

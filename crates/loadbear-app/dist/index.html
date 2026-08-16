@@ -147,7 +147,11 @@
   h2 .hint { font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--hair); }
 
   .graph { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; }
-  .graph svg { width: 100%; flex: 1 1 auto; min-height: 40px; display: block; }
+  /* 24 rather than 40. The floor is here so the plot cannot vanish, but at 40
+     it was higher than the space the left column actually leaves, so the plot
+     refused to shrink and the caption below it was clipped through its
+     descenders instead. "5 min ago" was rendering as "5 min aqo". */
+  .graph svg { width: 100%; flex: 1 1 auto; min-height: 24px; display: block; }
   .graph .strip { display: flex; height: 4px; overflow: hidden; flex: none;
                   border-radius: 2px; margin-top: 3px; }
   .graph .strip i { flex: 1 1 0; }
@@ -244,7 +248,7 @@
              border-bottom: 1px solid transparent; }
   footer a:hover { color: var(--plot-line); border-bottom-color: var(--plot-line); }
 
-  /* The collapsed shape: a 900x118 strip meant to sit on top of other windows
+  /* The collapsed shape: a 900x124 strip meant to sit on top of other windows
      all day without covering them.
 
      It is the same three nodes the full window already has, moved into one row
@@ -277,7 +281,7 @@
      reads "5 min ago" and "now", so the line above it was saying a third time
      what the axis says twice. */
   body.collapsed #app { padding: 8px 10px; }
-  body.collapsed .panel { padding: 0 8px; }
+  body.collapsed .panel { padding: 3px 8px; }
   body.collapsed #graph-panel > h2 { display: none; }
   body.collapsed .graph .cap { margin-top: 3px; }
 
@@ -286,12 +290,13 @@
      what holds four tiles at the width they have in the full window.
 
      No heading. Eight tiles reading "core #0" through "core #7" are not
-     mistakable for anything else. No padding above or below them either: the
-     tiles are the shortest thing in the strip that cannot be made shorter, so
-     they are what the whole window is measured from. */
+     mistakable for anything else. The tiles are the shortest thing in the strip
+     that cannot be made shorter, so they are what the whole window is measured
+     from, down to the 3px above and below them. Flush against the border read
+     as a mistake rather than as tight. */
   body.collapsed #temp { align-self: stretch; text-align: left;
                          background: var(--panel); border: 1px solid var(--line);
-                         border-radius: 8px; padding: 0 8px; }
+                         border-radius: 8px; padding: 3px 8px; }
   body.collapsed #zones { grid-template-columns: repeat(4, 1fr); }
   /* Set inline by `drawTemperature`, so overriding it takes the keyword. The
      button and its outcome are a full window conversation and there is no room

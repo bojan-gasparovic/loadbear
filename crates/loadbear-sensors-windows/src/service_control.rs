@@ -69,6 +69,69 @@ pub fn is_running() -> bool {
         .unwrap_or(false)
 }
 
+/// Bring the service to a stop and take it off the machine, if it is there.
+///
+/// Every step is best effort and nothing here reports failure, because both
+/// callers are recovering rather than transacting: an upgrade replacing a
+/// running helper, and an uninstall clearing up after one. A machine left half
+/// way through a failed setup has to come out of both clean.
+///
+/// The sleep after `delete` is not superstition. The registration lingers until
+/// the last handle closes, and creating the service again too soon fails with
+/// "marked for deletion".
+fn stop_and_deregister(m: &ServiceManager) {
+    let Ok(svc) = m.open_service(
+        SERVICE_NAME,
+        ServiceAccess::QUERY_STATUS | ServiceAccess::STOP | ServiceAccess::DELETE,
+    ) else {
+        return;
+    };
+
+    if let Ok(status) = svc.query_status() {
+        if status.current_state != ServiceState::Stopped {
+            let _ = svc.stop();
+            for _ in 0..20 {
+                std::thread::sleep(Duration::from_millis(150));
+                if svc
+                    .query_status()
+                    .map(|s| s.current_state == ServiceState::Stopped)
+                    .unwrap_or(true)
+                {
+                    break;
+                }
+            }
+        }
+    }
+
+    let _ = svc.delete();
+    drop(svc);
+    std::thread::sleep(Duration::from_millis(400));
+}
+
+/// Take the helper off the machine entirely: service gone, executable gone.
+///
+/// The uninstaller calls this. Without it, removing LoadBear would leave a
+/// service running as Local System, set to start again at every boot, pointing
+/// at a program the user believes they deleted. That is worse than shipping no
+/// uninstaller at all.
+///
+/// PawnIO is left alone on purpose. LoadBear did not write it, other monitoring
+/// tools use the same driver, and removing something a user may depend on
+/// elsewhere is not an uninstaller's business.
+pub fn stop_and_remove() -> Result<(), ServiceError> {
+    let m = manager(ServiceManagerAccess::CONNECT)?;
+    stop_and_deregister(&m);
+
+    let exe = installed_helper_path();
+    let _ = std::fs::remove_file(&exe);
+    // Only if empty. An installation directory that still holds the interface
+    // is the perMachine case, where the uninstaller removes the rest itself.
+    if let Some(dir) = exe.parent() {
+        let _ = std::fs::remove_dir(dir);
+    }
+    Ok(())
+}
+
 /// Register the service if absent, then start it.
 ///
 /// Idempotent: an already-registered service is started rather than treated as
@@ -87,29 +150,7 @@ pub fn install_and_start() -> Result<(), ServiceError> {
     // open, and an earlier version treated that failure as tolerable when the
     // target already existed. The result was an upgrade that appeared to
     // succeed while leaving the previous binary in place.
-    if let Ok(old) = m.open_service(
-        SERVICE_NAME,
-        ServiceAccess::QUERY_STATUS | ServiceAccess::STOP | ServiceAccess::DELETE,
-    ) {
-        if let Ok(status) = old.query_status() {
-            if status.current_state != ServiceState::Stopped {
-                let _ = old.stop();
-                for _ in 0..20 {
-                    std::thread::sleep(Duration::from_millis(150));
-                    if old
-                        .query_status()
-                        .map(|s| s.current_state == ServiceState::Stopped)
-                        .unwrap_or(true)
-                    {
-                        break;
-                    }
-                }
-            }
-        }
-        let _ = old.delete();
-        drop(old);
-        std::thread::sleep(Duration::from_millis(400));
-    }
+    stop_and_deregister(&m);
 
     if source != exe {
         if let Some(dir) = exe.parent() {

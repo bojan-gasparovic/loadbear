@@ -41,3 +41,7 @@ scratch/
 
 # Tauri regenerates these on every build
 crates/loadbear-app/gen/
+
+# The helper, staged for the bundler by build-installer.ps1. A build artifact
+# that happens to live under source, so it is ignored like any other.
+crates/loadbear-app/binaries/

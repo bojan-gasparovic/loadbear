@@ -51,6 +51,11 @@ fn main() -> Result<(), windows_service::Error> {
     if std::env::args().any(|a| a == "--setup") {
         std::process::exit(setup());
     }
+    // The uninstaller's half of the same bargain. It runs elevated, from the
+    // installation directory, immediately before the files are removed.
+    if std::env::args().any(|a| a == "--teardown") {
+        std::process::exit(teardown());
+    }
     // Diagnostic scaffolding, not product behaviour. Needs elevation, which is
     // why it lives in the helper rather than the interface.
     // Verifies the RAPL energy counters before they are trusted in the helper.
@@ -87,6 +92,17 @@ fn setup() -> i32 {
         Ok(()) => 0,
         Err(_) => 4,
     }
+}
+
+/// Stop the service and remove it, so uninstalling LoadBear actually does.
+///
+/// Always succeeds from the uninstaller's point of view. A machine that has
+/// never run setup has nothing to remove, and an uninstall that halts on that
+/// would leave the user with a half-removed application and an error they can
+/// do nothing about.
+fn teardown() -> i32 {
+    let _ = loadbear_sensors_windows::service_control::stop_and_remove();
+    0
 }
 
 fn service_main(_args: Vec<OsString>) {

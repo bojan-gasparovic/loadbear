@@ -288,13 +288,13 @@ async fn enable_temperature() -> Result<String, String> {
 /// expanded figure is 28 more than the 560 the layout was measured against,
 /// which is what keeps the twelve process rows fitting exactly.
 ///
-/// 118 is measured up from the tiles. Two rows of four are 71.6 tall and sit
-/// flush against their border, which makes 73.6 the height of both panels; the
+/// 124 is measured up from the tiles. Two rows of four are 71.6 tall and take
+/// 3px of air on each side, which makes 79.6 the height of both panels; the
 /// page's own padding and the title bar are the rest. The graph gave up its
 /// heading to fit and still has 47 of plot, which is more than it had when the
-/// strip was 50px taller.
+/// strip was 44px taller.
 const EXPANDED_SIZE: (f64, f64) = (900.0, 588.0);
-const COLLAPSED_SIZE: (f64, f64) = (900.0, 118.0);
+const COLLAPSED_SIZE: (f64, f64) = (900.0, 124.0);
 
 /// Switch the window between the full panel and the always on top strip.
 ///

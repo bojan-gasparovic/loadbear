@@ -29,12 +29,24 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["nsis"],
+    "publisher": "Bojan Gasparovic",
+    "copyright": "Copyright 2026 Bojan Gasparovic. Apache-2.0.",
+    "category": "DeveloperTool",
+    "shortDescription": "Shows what is overloading your machine, not merely that it is busy.",
+    "longDescription": "LoadBear is a resident monitor that measures resource stall rather than utilization, names the process or container responsible, and judges the hardware against limits its vendor published rather than against invented thresholds.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.ico"
-    ]
+    ],
+    "externalBin": ["binaries/loadbear-service"],
+    "windows": {
+      "nsis": {
+        "installMode": "perMachine",
+        "installerHooks": "nsis/hooks.nsh"
+      }
+    }
   }
 }
