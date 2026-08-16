@@ -279,12 +279,12 @@ async fn enable_temperature() -> Result<String, String> {
     .map_err(|_| "the installer could not be started".to_string())?
 }
 
-/// The two shapes the window takes, in logical pixels.
+/// The three shapes the window takes, in logical pixels.
 ///
-/// Width is the same in both, so nothing jumps sideways on the desktop when the
-/// shape changes and the strip lines up with the panel it came from.
+/// The first two share a width, so nothing jumps sideways on the desktop when
+/// the shape changes and the strip lines up with the panel it came from.
 ///
-/// Both heights include the 28px title bar the page draws for itself. The
+/// Their heights include the 28px title bar the page draws for itself. The
 /// expanded figure is 28 more than the 560 the layout was measured against,
 /// which is what keeps the twelve process rows fitting exactly.
 ///
@@ -296,22 +296,54 @@ async fn enable_temperature() -> Result<String, String> {
 const EXPANDED_SIZE: (f64, f64) = (900.0, 588.0);
 const COLLAPSED_SIZE: (f64, f64) = (900.0, 124.0);
 
-/// Switch the window between the full panel and the always on top strip.
+/// The taskbar strip, in logical pixels.
+///
+/// 48 is the Windows 11 taskbar height, measured rather than assumed: on
+/// 2026-08-16 a 1080 pixel display reported a 1032 pixel work area at 96 DPI.
+/// Windows 11 22H2 removed the small taskbar setting, so this does not vary,
+/// and Tauri sizes in logical pixels so a scaled display needs no second
+/// figure. Do not trim it to look tidier.
+///
+/// There is no title bar in this shape, so all 48 are content. 360 is the sum
+/// of a 28px bear, a sparkline, and a 136px block of tiles, plus the air
+/// between them.
+///
+/// The strip is dragged on top of the taskbar by hand. It is not embedded into
+/// it: `IDeskBand` was deprecated in Windows 10 and the Windows 11 taskbar does
+/// not host it, and reparenting into `Shell_TrayWnd` attaches the two threads'
+/// input queues, so a stall here could stall the shell.
+const TASKBAR_SIZE: (f64, f64) = (360.0, 48.0);
+
+/// The shape a mode names, or nothing if it names no mode at all.
+///
+/// Returning an `Option` rather than falling back to expanded is deliberate. A
+/// typo in the page would otherwise resize the window to something plausible
+/// and look like a layout bug rather than like the misspelling it is.
+fn size_for_mode(mode: &str) -> Option<(f64, f64)> {
+    match mode {
+        "expanded" => Some(EXPANDED_SIZE),
+        "collapsed" => Some(COLLAPSED_SIZE),
+        "taskbar" => Some(TASKBAR_SIZE),
+        _ => None,
+    }
+}
+
+/// Switch the window between the full panel, the always on top strip, and the
+/// taskbar strip.
 ///
 /// The page has already rearranged itself by the time this runs. Resizing is
 /// the half the page cannot do for itself: the window is declared
 /// non-resizable so a person cannot drag it to a shape nothing was laid out
-/// for, which does not stop the application from choosing one of its own two.
+/// for, which does not stop the application from choosing one of its own three.
+///
+/// A string rather than a boolean, because a boolean cannot carry three states
+/// and a second boolean would allow a fourth combination that is not a shape.
 ///
 /// Not remembered across restarts. It always opens as the full panel, since
 /// that is the shape that can explain itself.
 #[tauri::command]
-fn set_collapsed(window: tauri::Window, collapsed: bool) -> Result<(), String> {
-    let (width, height) = if collapsed {
-        COLLAPSED_SIZE
-    } else {
-        EXPANDED_SIZE
-    };
+fn set_mode(window: tauri::Window, mode: String) -> Result<(), String> {
+    let (width, height) = size_for_mode(&mode).ok_or_else(|| format!("no such mode: {mode}"))?;
     window
         .set_size(tauri::LogicalSize::new(width, height))
         .map_err(|e| e.to_string())
@@ -643,7 +675,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             get_status,
             enable_temperature,
-            set_collapsed,
+            set_mode,
             minimize_window,
             hide_window,
             open_repository,
@@ -1020,6 +1052,45 @@ mod tests {
         assert!(
             window.width() > tray.width(),
             "the window icon must not be the tray icon"
+        );
+    }
+
+    #[test]
+    fn every_mode_has_its_own_shape() {
+        // Two modes sharing a shape means one of them cannot be seen to have
+        // been entered, which reads as the switch being broken.
+        assert_ne!(EXPANDED_SIZE, COLLAPSED_SIZE);
+        assert_ne!(COLLAPSED_SIZE, TASKBAR_SIZE);
+        assert_ne!(EXPANDED_SIZE, TASKBAR_SIZE);
+    }
+
+    #[test]
+    fn the_taskbar_shape_is_the_windows_11_taskbar_height() {
+        // Measured on 2026-08-16: a 1080 pixel display reporting a 1032 pixel
+        // work area at 96 DPI. Windows 11 22H2 removed the small taskbar
+        // option, so this is not a setting that varies.
+        assert_eq!(size_for_mode("taskbar"), Some((360.0, 48.0)));
+    }
+
+    #[test]
+    fn an_unknown_mode_is_refused_rather_than_defaulted() {
+        // Falling back to expanded would turn a typo in the page into a
+        // resize that looks like a layout fault instead of a misspelling.
+        assert!(size_for_mode("wobbly").is_none());
+        assert!(size_for_mode("").is_none());
+        assert!(size_for_mode("Expanded").is_none());
+    }
+
+    #[test]
+    fn the_taskbar_strip_is_the_only_shape_with_no_title_bar() {
+        // The other two draw a 28px caption for themselves and carry it in
+        // their height. This one gives all 48 pixels to content, so it has to
+        // be the shortest by more than the caption it does without.
+        let (_, taskbar) = TASKBAR_SIZE;
+        let (_, collapsed) = COLLAPSED_SIZE;
+        assert!(
+            collapsed - taskbar > 28.0,
+            "the strip must be shorter than the collapsed shape minus its caption"
         );
     }
 }

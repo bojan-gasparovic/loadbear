@@ -165,6 +165,24 @@ which is why the old Start here section described them as missing.
   **An already installed helper still has the old mode** until
   `loadbear-service.exe --setup` is re-run elevated, which replaces the copy
   under `%ProgramFiles%\LoadBear`.
+- **LB-24: a third window shape**, 360x48, dragged on top of the taskbar and
+  left there. `TASKBAR_SIZE` beside the other two, `set_collapsed` replaced by
+  `set_mode` over three named strings, and `size_for_mode` returning an
+  `Option` so a name nothing knows is refused rather than resized to something
+  plausible. Plan and measurements in
+  `docs/plans/2026-08-16-loadbear-taskbar-mode.md`.
+
+  **No native code and no overlay.** The window is already `alwaysOnTop`, and
+  `data-tauri-drag-region="deep"` on `#compact` makes the whole strip drag.
+  That value was read out of `tauri-2.11.5/src/window/scripts/drag.js` rather
+  than remembered: `isDragRegion` walks the composed path upward, a bare
+  attribute matches only a direct click, `"deep"` matches the subtree, and the
+  walk stops at any clickable element with no attribute of its own, which is
+  what leaves the restore chevron clickable without asking for it.
+
+  **Bojan has not judged it yet.** Whether a 12px number in a coloured 19px
+  tile reads at a glance, and whether clicking the taskbar raises it above the
+  strip, are the two things that decide whether the shape works at all.
 
 ## Decisions that should not be relitigated without reason
 

@@ -4,7 +4,9 @@
 
 **Goal:** Add a third window shape, 360x48, that a person drags on top of the Windows taskbar and leaves there. It shows the bear, the five minute graph, and all eight core temperatures in a 4x2 grid, with no title bar and nothing else.
 
-**Status:** Designed 2026-08-16, not started. Agreed with Bojan in conversation; no code written.
+**Status:** Designed 2026-08-16, built the same day. Both tasks are done and the
+application has been rebuilt and launched. What is left is the part no test can
+answer: Bojan looking at the strip on his own taskbar, listed at the end of Task 2.
 
 **Why this works without native code:** The window already carries `alwaysOnTop: true` in `tauri.conf.json`, so a strip positioned over the taskbar draws on top of it. Nothing is embedded into the taskbar and no Win32 call is involved.
 
@@ -94,7 +96,7 @@ A collapsed tile is about 34px: 3px padding twice, 1px border twice, a 9px label
 **Interfaces:**
 - Produces: `set_mode(window, mode: &str) -> Result<(), String>`, accepting `"expanded"`, `"collapsed"` and `"taskbar"`. Replaces `set_collapsed`. Task 2 calls it.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 `main.rs` already has a test module covering icon sizes. Add tests that the three modes map to three distinct sizes and that an unknown mode is refused rather than defaulted.
 
@@ -119,7 +121,7 @@ fn an_unknown_mode_is_refused_rather_than_defaulted() {
 }
 ```
 
-- [ ] **Step 2: Add the constant and the lookup**
+- [x] **Step 2: Add the constant and the lookup**
 
 Add beside the existing two, with the measurement recorded in the doc comment so nobody later trims it to look tidier:
 
@@ -144,11 +146,11 @@ fn size_for_mode(mode: &str) -> Option<(f64, f64)> {
 }
 ```
 
-- [ ] **Step 3: Replace the command**
+- [x] **Step 3: Replace the command**
 
 `set_collapsed` becomes `set_mode`, because a boolean cannot carry three states and adding a second boolean would allow a shape that does not exist. Keep the existing doc comment's point that the page has already rearranged itself by the time this runs. Update the `invoke_handler` list at `main.rs:646`.
 
-- [ ] **Step 4: Verify**
+- [x] **Step 4: Verify**
 
 `cargo test -p loadbear-app` and `cargo clippy --all-targets -- -D warnings`.
 
@@ -163,7 +165,7 @@ fn size_for_mode(mode: &str) -> Option<(f64, f64)> {
 - Consumes: `set_mode` from Task 1.
 - Produces: `body.taskbar` styles and a `setMode(mode)` function replacing `setCollapsed(bool)`.
 
-- [ ] **Step 1: Read how Tauri v2 decides what is a drag region, before writing the drag handling**
+- [x] **Step 1: Read how Tauri v2 decides what is a drag region, before writing the drag handling**
 
 **Do not write this from memory.** The question is whether `data-tauri-drag-region` on a container makes its children draggable, or whether Tauri tests the exact event target. If it tests the exact target, then putting the attribute on `#compact` gives a strip that only drags in the gaps between the bear, the graph and the tiles, which is not what "the whole strip drags" means.
 
@@ -173,7 +175,28 @@ Read the drag region handling in the Tauri v2 source or its documentation, then 
 
 **If it walks ancestors,** the attribute on `#compact` is enough and the chevron needs the attribute removed from itself.
 
-- [ ] **Step 2: Add the restore control**
+### Answer, read 2026-08-16
+
+Source: `tauri-2.11.5/src/window/scripts/drag.js`, the copy in the cargo registry that this build links against, not the documentation and not a newer release.
+
+It does both, and which one is chosen by the attribute's own value. `isDragRegion` walks `e.composedPath()` from the event target upward and returns on the first element that decides:
+
+| Value | Meaning |
+|---|---|
+| bare, or `"true"` | Drags only on a direct click on that element. `el === composedPath[0]` |
+| `"deep"` | Drags anywhere in the subtree |
+| `"false"` | Blocks dragging, for that element and for everything above it |
+
+So neither branch of the plan applies as written. **No overlay is needed.** One attribute, `data-tauri-drag-region="deep"` on `#compact`, gives the whole strip.
+
+Two details the walk settles for free:
+
+- **The chevron stays clickable without any attribute of its own.** The loop returns `false` at any clickable element carrying no attribute, and `BUTTON` is in its `CLICKABLE_TAGS` set. `#tb-restore` is a button, so it blocks the drag on itself and nowhere else.
+- **SVG does not interrupt the walk.** The loop skips anything that is not an `HTMLElement`, so a click landing on `#chart` continues up to `#compact` rather than stopping at the plot.
+
+**The attribute is set and removed by `setMode` rather than written into the markup**, because `#compact` also holds the collapsed shape, and collapsed already drags from its own title bar. Giving it a deep drag region would be a change to a mode this plan says to leave alone.
+
+- [x] **Step 2: Add the restore control**
 
 The title bar is hidden in taskbar mode, which takes `#tb-collapse` with it. So taskbar mode needs its own way out. Add a chevron inside `#compact`, hidden in every other mode:
 
@@ -183,7 +206,7 @@ The title bar is hidden in taskbar mode, which takes `#tb-collapse` with it. So 
 
 16px wide, `var(--faint)`, no background until hover. It is the only click target in the strip.
 
-- [ ] **Step 3: Write the styles**
+- [x] **Step 3: Write the styles**
 
 Mirror the `body.collapsed` block at `index.html:251`. The three columns change and the tiles lose their labels:
 
@@ -215,7 +238,7 @@ body.taskbar #temp-note { display: none !important; }
 
 The degree symbol goes with the label. Eight coloured numbers in a grid beside a bear are not mistakable for anything else, and the unit costs a third of the width of the number it follows.
 
-- [ ] **Step 4: Rewrite the mode switch**
+- [x] **Step 4: Rewrite the mode switch**
 
 `setCollapsed(next)` becomes `setMode(next)` over three string values. Both compact modes reparent into `#compact`, so the reparenting condition becomes `next !== 'expanded'` rather than a boolean. The class toggle becomes two calls, and only one can be true.
 

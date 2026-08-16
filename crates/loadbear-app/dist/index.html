@@ -303,6 +303,72 @@
      for either in a strip. */
   body.collapsed #enable,
   body.collapsed #enable-note { display: none !important; }
+
+  /* The taskbar shape: a 360x48 strip meant to be dragged on top of the
+     Windows taskbar and left there.
+
+     48 is measured, not chosen. A 1080 pixel display reports a 1032 pixel work
+     area at 96 DPI, and Windows 11 22H2 removed the small taskbar setting, so
+     it does not vary. The window already opens `alwaysOnTop`, which is the
+     whole trick: nothing is embedded into the taskbar and no Win32 call is
+     involved.
+
+     Same three nodes again, moved rather than drawn a second time, so `render`
+     still finds `#chart` and `#zones` by id and stays unaware that a third
+     layout exists. */
+  body.taskbar #titlebar { display: none; }
+  body.taskbar header,
+  body.taskbar .cols,
+  body.taskbar footer { display: none; }
+  body.taskbar #app { grid-template-rows: 1fr; padding: 2px 4px; }
+  body.taskbar #compact { display: grid;
+                          grid-template-columns: 28px 1fr 136px 16px;
+                          gap: 6px; align-items: center;
+                          min-height: 0; overflow: hidden; }
+  body.taskbar #compact > * { min-height: 0; }
+  body.taskbar #bear { width: 28px; height: 28px; align-self: center; }
+
+  /* The graph gives up its box. A border around a 154px sparkline inside a
+     48px strip is two frames drawn around the same thing, and the pixels the
+     border and its padding cost are pixels the plot does not have. */
+  body.taskbar #graph-panel { border: 0; background: transparent; padding: 0; }
+  body.taskbar #graph-panel > h2,
+  body.taskbar .graph .cap { display: none; }
+
+  body.taskbar #temp { align-self: stretch; text-align: left;
+                       background: transparent; border: 0; padding: 0; }
+  body.taskbar #zones { grid-template-columns: repeat(4, 1fr); gap: 2px;
+                        align-content: center; height: 100%; }
+  body.taskbar #zones .z { padding: 1px 0; border-radius: 3px; }
+  /* The label does not fit and comes off. A collapsed tile is about 34px, so
+     two rows plus the gap is 72, larger than the whole taskbar. What is left
+     holds a border, a pixel of padding and a 12px number, and nothing else.
+     Four columns by two rows says which core each number is, which is what
+     collapsed mode already relies on spatially.
+
+     The degree symbol goes with it. Eight coloured numbers in a grid beside a
+     bear are not mistakable for anything else, and the unit costs a third of
+     the width of the number it follows. */
+  body.taskbar #zones .zl,
+  body.taskbar #zones .zu { display: none; }
+  body.taskbar #zones .zv { font-size: 12px; line-height: 1.1; }
+
+  /* Set inline by `drawTemperature`, so overriding it takes the keyword. */
+  body.taskbar #enable,
+  body.taskbar #enable-note,
+  body.taskbar #temp-note { display: none !important; }
+
+  /* The way out. The title bar is gone in this shape, and with it the chevron
+     that would otherwise switch modes, so the strip has to carry its own. It
+     is the only click target in it: everything else is a drag region. */
+  #tb-restore { display: none; }
+  body.taskbar #tb-restore { display: flex; align-items: center;
+                             justify-content: center; align-self: stretch;
+                             width: 16px; border: 0; padding: 0; margin: 0;
+                             border-radius: 3px; cursor: pointer;
+                             background: transparent; color: var(--faint);
+                             font: inherit; font-size: 10px; line-height: 1; }
+  body.taskbar #tb-restore:hover { background: var(--well); color: var(--text); }
 </style>
 </head>
 <body>
@@ -407,9 +473,15 @@
     </div>
   </div>
 
-  <!-- Empty until the strip is asked for. The three nodes that live here are
-       borrowed from the layout above rather than copied. -->
-  <div id="compact"></div>
+  <!-- Empty until a strip is asked for. The three nodes that live here are
+       borrowed from the layout above rather than copied.
+
+       The drag attribute is added and removed by `setMode`, not written here.
+       Only the taskbar shape drags from anywhere on itself; the collapsed one
+       keeps its own title bar and drags from that, as it always did. -->
+  <div id="compact">
+    <button id="tb-restore" type="button" title="Expand">&#9652;</button>
+  </div>
 
   <footer>
     <span id="stamp"></span>
@@ -653,15 +725,21 @@ function render(s) {
 //
 // The layout changes before the window does, so the frame in between shows the
 // strip in a tall window rather than the full layout in a 192px one.
-let collapsed = false;
+//
+// Three shapes, named rather than counted, because the shell refuses a name it
+// does not know and a number would resize to whatever it happened to mean.
+const MODES = ['expanded', 'collapsed', 'taskbar'];
+let mode = 'expanded';
 
-async function setCollapsed(next) {
+async function setMode(next) {
   const bear = $('bear');
   const graph = $('graph-panel');
   const temp = $('temp');
 
-  if (next) {
-    $('compact').append(bear, graph, temp);
+  if (next !== 'expanded') {
+    // Before `#tb-restore`, which is the last column of the taskbar grid and
+    // is hidden in every other shape. Appending would put the way out first.
+    $('compact').prepend(bear, graph, temp);
   } else {
     // Back where each came from. The bear is the first thing in `.hleft` and
     // the other two are the last in theirs, so this restores the original
@@ -671,19 +749,50 @@ async function setCollapsed(next) {
     document.querySelector('.col-left').append(graph);
   }
 
-  document.body.classList.toggle('collapsed', next);
-  $('tb-collapse').innerHTML = next ? '&#9662;' : '&#9652;';
-  $('tb-collapse').title = next ? 'Expand' : 'Collapse';
-  collapsed = next;
+  document.body.classList.toggle('collapsed', next === 'collapsed');
+  document.body.classList.toggle('taskbar', next === 'taskbar');
+
+  // Read from the Tauri 2.11.5 source on 2026-08-16
+  // (`tauri/src/window/scripts/drag.js`): `isDragRegion` walks the composed
+  // path upward from the event target, and "deep" makes the whole subtree a
+  // drag region while a bare attribute matches only a direct click on the
+  // element itself. So one attribute on `#compact` is enough and no
+  // transparent overlay is needed.
+  //
+  // The same walk stops at a clickable element carrying no attribute of its
+  // own, which is what leaves `#tb-restore` clickable inside a strip that
+  // otherwise drags from anywhere.
+  //
+  // Only the taskbar shape gets it. Collapsed still has its title bar to drag
+  // from, and giving it this would be a change to a mode nobody asked to
+  // change.
+  if (next === 'taskbar') {
+    $('compact').setAttribute('data-tauri-drag-region', 'deep');
+  } else {
+    $('compact').removeAttribute('data-tauri-drag-region');
+  }
+
+  $('tb-collapse').innerHTML = next === 'expanded' ? '&#9652;' : '&#9662;';
+  $('tb-collapse').title = next === 'expanded' ? 'Collapse' : 'Next shape';
+  mode = next;
 
   try {
-    await window.__TAURI__.core.invoke('set_collapsed', { collapsed: next });
+    await window.__TAURI__.core.invoke('set_mode', { mode: next });
   } catch (e) {
     console.error(e);
   }
 }
 
-$('tb-collapse').addEventListener('click', () => setCollapsed(!collapsed));
+// Expanded to collapsed to taskbar, then round. The last leg is reachable only
+// in theory: the title bar this button lives in is hidden in taskbar mode, so
+// the way back from there is `#tb-restore`.
+$('tb-collapse').addEventListener('click', () => {
+  setMode(MODES[(MODES.indexOf(mode) + 1) % MODES.length]);
+});
+
+// Straight back to the full window. Someone clicking their way out of a 48px
+// strip wants out of it, not one step along a cycle.
+$('tb-restore').addEventListener('click', () => setMode('expanded'));
 
 // With no system chrome there is nothing else to minimise or dismiss the
 // window, so these two are not conveniences.
