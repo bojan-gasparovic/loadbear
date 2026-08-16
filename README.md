@@ -70,6 +70,12 @@ Elevation is paid once. Decline it and everything else still works, with tempera
 
 Uninstall from Settings, Apps. The uninstaller stops and deregisters the helper service before it removes anything, so nothing is left running.
 
+If you registered the helper by hand from a source build, there is no uninstaller to do it for you. Undo it from an elevated prompt:
+
+```
+target\release\loadbear-service.exe --teardown
+```
+
 PawnIO is left installed on purpose. LoadBear did not write it, other monitoring tools use the same driver, and removing something you may depend on elsewhere is not an uninstaller's business. Remove it separately if you want it gone.
 
 ## Building it
