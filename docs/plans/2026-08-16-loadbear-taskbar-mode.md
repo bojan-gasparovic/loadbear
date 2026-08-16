@@ -242,7 +242,11 @@ The degree symbol goes with the label. Eight coloured numbers in a grid beside a
 
 `setCollapsed(next)` becomes `setMode(next)` over three string values. Both compact modes reparent into `#compact`, so the reparenting condition becomes `next !== 'expanded'` rather than a boolean. The class toggle becomes two calls, and only one can be true.
 
-The chevron in the title bar cycles expanded to collapsed to taskbar and back to expanded. `#tb-restore` goes straight back to expanded, since the person clicking it wants out of a 48px strip and not a step through it.
+~~The chevron in the title bar cycles expanded to collapsed to taskbar and back to expanded.~~ **Cycling was built, shown to Bojan, and rejected the same day.** A control whose meaning depends on the shape you are already in has to be clicked to find out what it does.
+
+**One control per shape instead.** `#tb-collapse` is a plain toggle between expanded and collapsed, which is what it was before this plan touched it, and it is the only one with two states because it is the only toggle. `#tb-strip` is a new button beside it, glyph `&#9644;` at 8px, and it goes straight to the taskbar shape. `#tb-restore` goes straight back to expanded, since the person clicking it wants out of a 48px strip and not a step through it.
+
+Neither title bar control is reachable from the strip, which hides the bar they live in.
 
 - [ ] **Step 5: Verify by running it**
 

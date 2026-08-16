@@ -69,6 +69,10 @@
                        font: inherit; font-size: 11px; line-height: 1;
                        display: flex; align-items: center; justify-content: center; }
   #tb-buttons button:hover { background: var(--well); color: var(--text); }
+  /* A bar, beside two small triangles. It has to read as a strip lying along
+     the bottom of the screen rather than as a third arrow, and at the size the
+     triangles use it is a heavy black slab, so it comes down to meet them. */
+  #tb-strip { font-size: 8px; }
   /* The one colour Windows uses for this and the one users read without
      thinking, so it is not worth being original about. */
   #tb-close:hover { background: #c42b1c; color: #ffffff; }
@@ -376,7 +380,11 @@
   <div id="tb-icon" role="img" aria-label="LoadBear"></div>
   <div id="tb-title" data-tauri-drag-region>LoadBear</div>
   <div id="tb-buttons">
+    <!-- One button per shape, not one button cycling through them. A control
+         whose meaning depends on which shape you are already in has to be
+         clicked to find out what it does. -->
     <button id="tb-collapse" type="button" title="Collapse">&#9652;</button>
+    <button id="tb-strip" type="button" title="Taskbar strip">&#9644;</button>
     <button id="tb-min" type="button" title="Minimise">&#8211;</button>
     <button id="tb-close" type="button" title="Close to tray">&#10005;</button>
   </div>
@@ -728,7 +736,6 @@ function render(s) {
 //
 // Three shapes, named rather than counted, because the shell refuses a name it
 // does not know and a number would resize to whatever it happened to mean.
-const MODES = ['expanded', 'collapsed', 'taskbar'];
 let mode = 'expanded';
 
 async function setMode(next) {
@@ -772,8 +779,10 @@ async function setMode(next) {
     $('compact').removeAttribute('data-tauri-drag-region');
   }
 
-  $('tb-collapse').innerHTML = next === 'expanded' ? '&#9652;' : '&#9662;';
-  $('tb-collapse').title = next === 'expanded' ? 'Collapse' : 'Next shape';
+  // The chevron is the only one of the three that has two states, because it
+  // is the only one that is a toggle. Down means it will give the window back.
+  $('tb-collapse').innerHTML = next === 'collapsed' ? '&#9662;' : '&#9652;';
+  $('tb-collapse').title = next === 'collapsed' ? 'Expand' : 'Collapse';
   mode = next;
 
   try {
@@ -783,12 +792,16 @@ async function setMode(next) {
   }
 }
 
-// Expanded to collapsed to taskbar, then round. The last leg is reachable only
-// in theory: the title bar this button lives in is hidden in taskbar mode, so
-// the way back from there is `#tb-restore`.
+// One control per shape rather than one control cycling through them. A button
+// whose meaning depends on the shape you are already in has to be clicked to
+// find out what it does, and there is no way to look at it and know.
+//
+// Neither of these is reachable from the taskbar strip, which hides the title
+// bar they live in. `#tb-restore` is the way out of that one.
 $('tb-collapse').addEventListener('click', () => {
-  setMode(MODES[(MODES.indexOf(mode) + 1) % MODES.length]);
+  setMode(mode === 'collapsed' ? 'expanded' : 'collapsed');
 });
+$('tb-strip').addEventListener('click', () => setMode('taskbar'));
 
 // Straight back to the full window. Someone clicking their way out of a 48px
 // strip wants out of it, not one step along a cycle.

@@ -27,7 +27,7 @@ between a repository and a product.
 
 ## Where it got to
 
-It runs, it is used daily, and it is pushed. **202 tests**, clippy clean.
+It runs and it is used daily. **206 tests**, clippy clean.
 
 ```
 cd context-library/desktop-apps/loadbear
@@ -35,9 +35,10 @@ cargo build --release
 target\release\loadbear-app.exe
 ```
 
-Both repositories were fully pushed as of 2026-08-16 01:30. Verified against
-the remotes rather than local refs, after I had spent most of a session
-repeating a stale "40 commits unpushed" claim that was wrong.
+**Neither repository is pushed.** As of the end of the fourth session this one
+is four commits ahead of `origin/main` and zeroemdashes is three. Check the
+remotes rather than local refs before repeating either number, which is the
+mistake that cost most of an earlier session.
 
 | Crate | Role |
 |---|---|
@@ -180,7 +181,14 @@ which is why the old Start here section described them as missing.
   walk stops at any clickable element with no attribute of its own, which is
   what leaves the restore chevron clickable without asking for it.
 
-  **Bojan has not judged it yet.** Whether a 12px number in a coloured 19px
+  **The title bar carries one control per shape, not one that cycles.** The
+  cycling version was built first and rejected on sight: a button whose meaning
+  depends on the shape you are already in has to be clicked to find out what it
+  does. `#tb-collapse` is a plain expanded and collapsed toggle again,
+  `#tb-strip` goes to the taskbar shape, and `#tb-restore` inside the strip is
+  the only way back out of it, since the strip hides the title bar.
+
+  **Bojan has not judged the strip itself yet.** Whether a 12px number in a coloured 19px
   tile reads at a glance, and whether clicking the taskbar raises it above the
   strip, are the two things that decide whether the shape works at all.
 
