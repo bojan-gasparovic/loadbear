@@ -1,6 +1,6 @@
 # LoadBear
 
-A resident monitor that shows you what is overloading your machine, not merely that it is busy.
+A desktop gadget that shows you what is overloading your machine, not just that it is busy.
 
 > Status: working on Windows and used daily on the machine it was written on. See [Installing it](#installing-it).
 
